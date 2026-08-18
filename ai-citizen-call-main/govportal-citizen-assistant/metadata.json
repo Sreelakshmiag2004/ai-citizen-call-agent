@@ -1,0 +1,6 @@
+{
+  "name": "GovPortal Citizen Portal",
+  "description": "Unified Citizen, Call Center, Officer, and Admin Portals with automatic credential-based routing, AI processing, assignment tracking, SLA monitoring, and resolution workflows.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
