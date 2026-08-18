@@ -6,7 +6,11 @@ from typing import Any, Dict
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from app.services.analysis_service import analysis_service
+from app.services.analysis_service import (
+    LLMQuotaExceededError,
+    LLMUnavailableError,
+    analysis_service,
+)
 from app.services.whisper_service import whisper_service
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,10 @@ async def analyze_transcript(request: AnalyzeRequest) -> Dict[str, Any]:
             analysis_service.analyze_complaint, request.transcript
         )
         return result
+    except LLMQuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except LLMUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except RuntimeError as re:
@@ -94,6 +102,10 @@ async def process_complaint(file: UploadFile = File(...)) -> Dict[str, Any]:
         }
     except HTTPException:
         raise
+    except LLMQuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except LLMUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except RuntimeError as re:

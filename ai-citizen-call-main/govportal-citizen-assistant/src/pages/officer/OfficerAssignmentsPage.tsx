@@ -1,38 +1,54 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { 
-  Search, 
-  Filter, 
-  ChevronLeft, 
-  ChevronRight 
+import {
+  Search,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
 } from 'lucide-react';
-import { OFFICER_MY_ASSIGNMENTS, OfficerAssignment } from '../../data/officerData';
 
+// Real backend data (via AppContext, same source as OfficerComplaintsPage.tsx
+// -- GET /complaints). The backend has no per-officer ownership model, so
+// this is the full queue rather than a filtered "assigned to me" set (same
+// caveat already documented on OfficerDashboardPage.tsx).
 export const OfficerAssignmentsPage: React.FC = () => {
-  const { navigate, setSelectedComplaintId } = useApp();
+  const { navigate, setSelectedComplaintId, complaints, complaintsLoading } = useApp();
   const [activeTab, setActiveTab] = useState<'all' | 'in-progress' | 'pending' | 'overdue' | 'resolved'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
 
+  // 'pending' maps to the real 'New' status (not yet started), and
+  // 'overdue' maps to slaStatus === 'BREACHED' (the backend has no separate
+  // "Overdue" complaint status -- overdue-ness is an SLA property, not a
+  // workflow status), mirroring how OfficerDashboardPage already treats it.
+  const counts = useMemo(() => ({
+    all: complaints.length,
+    'in-progress': complaints.filter((c) => c.status === 'In Progress' || c.status === 'Assigned').length,
+    pending: complaints.filter((c) => c.status === 'New').length,
+    overdue: complaints.filter((c) => c.slaStatus === 'BREACHED').length,
+    resolved: complaints.filter((c) => c.status === 'Resolved').length,
+  }), [complaints]);
+
   const tabs = [
-    { id: 'all', label: 'All (28)' },
-    { id: 'in-progress', label: 'In Progress (11)' },
-    { id: 'pending', label: 'Pending (9)' },
-    { id: 'overdue', label: 'Overdue (2)' },
-    { id: 'resolved', label: 'Resolved (6)' },
+    { id: 'all', label: `All (${counts.all})` },
+    { id: 'in-progress', label: `In Progress (${counts['in-progress']})` },
+    { id: 'pending', label: `Pending (${counts.pending})` },
+    { id: 'overdue', label: `Overdue (${counts.overdue})` },
+    { id: 'resolved', label: `Resolved (${counts.resolved})` },
   ];
 
-  const filteredAssignments = OFFICER_MY_ASSIGNMENTS.filter(item => {
-    const matchesSearch = 
+  const filteredAssignments = complaints.filter(item => {
+    const matchesSearch =
       item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.issue.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.location.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (!matchesSearch) return false;
 
-    if (activeTab === 'in-progress') return item.status === 'In Progress';
-    if (activeTab === 'pending') return item.status === 'Pending' || item.status === 'New';
-    if (activeTab === 'overdue') return item.status === 'Overdue';
+    if (activeTab === 'in-progress') return item.status === 'In Progress' || item.status === 'Assigned';
+    if (activeTab === 'pending') return item.status === 'New';
+    if (activeTab === 'overdue') return item.slaStatus === 'BREACHED';
     if (activeTab === 'resolved') return item.status === 'Resolved';
     return true;
   });
@@ -48,15 +64,17 @@ export const OfficerAssignmentsPage: React.FC = () => {
         return 'bg-blue-50 text-blue-700 border border-blue-200/60';
       case 'New':
         return 'bg-sky-50 text-sky-700 border border-sky-200/60';
-      case 'Pending':
+      case 'Assigned':
         return 'bg-amber-50 text-amber-700 border border-amber-200/60';
-      case 'Overdue':
-        return 'bg-rose-50 text-rose-700 border border-rose-200/60';
+      case 'Closed':
+        return 'bg-slate-100 text-slate-700 border border-slate-200';
       case 'Resolved':
       default:
         return 'bg-emerald-50 text-emerald-700 border border-emerald-200/60';
     }
   };
+
+  const formatDueDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : '-');
 
   return (
     <div id="officer-assignments-screen" className="space-y-5 animate-in fade-in duration-200">
@@ -128,7 +146,17 @@ export const OfficerAssignmentsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAssignments.map((row) => (
+              {complaintsLoading ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                    <Loader2 className="w-4 h-4 animate-spin inline mr-2" />Loading…
+                  </td>
+                </tr>
+              ) : filteredAssignments.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-slate-400">No assignments found.</td>
+                </tr>
+              ) : filteredAssignments.map((row) => (
                 <tr
                   key={row.id}
                   onClick={() => handleRowClick(row.id)}
@@ -140,12 +168,12 @@ export const OfficerAssignmentsPage: React.FC = () => {
                     </span>
                   </td>
                   <td className="py-3 px-4 font-bold text-slate-800">
-                    {row.issue}
+                    {row.title}
                   </td>
                   <td className="py-3 px-3">
                     <span
                       className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
-                        row.priority === 'High'
+                        row.priority === 'Critical' || row.priority === 'High'
                           ? 'bg-rose-50 text-rose-600 border border-rose-200/60'
                           : 'bg-amber-50 text-amber-700 border border-amber-200/60'
                       }`}
@@ -157,7 +185,7 @@ export const OfficerAssignmentsPage: React.FC = () => {
                     {row.location}
                   </td>
                   <td className="py-3 px-4 text-slate-600 font-medium">
-                    {row.dueDate}
+                    {formatDueDate(row.slaDeadline)}
                   </td>
                   <td className="py-3 px-4 text-right">
                     <span
@@ -178,7 +206,7 @@ export const OfficerAssignmentsPage: React.FC = () => {
         <div className="p-4 border-t border-slate-200/80 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
           <div>
             Showing <strong className="text-slate-800 font-bold">1 to {filteredAssignments.length}</strong> of{' '}
-            <strong className="text-slate-800 font-bold">28</strong> assignments
+            <strong className="text-slate-800 font-bold">{complaints.length}</strong> assignments
           </div>
 
           <div className="flex items-center gap-3">

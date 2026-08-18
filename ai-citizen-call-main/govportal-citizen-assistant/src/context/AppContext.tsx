@@ -167,6 +167,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return 'landing';
   };
 
+  // Preserves the `?id=` query portion of a deep-link hash (e.g.
+  // `#complaint-details?id=CMP-1018`) that getInitialRoute() above
+  // deliberately strips before matching the route name, so a full browser
+  // refresh on the Track Complaint page still knows which complaint to load.
+  const getInitialComplaintId = (): string | null => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const queryPart = window.location.hash.split('?')[1];
+      if (queryPart) {
+        const id = new URLSearchParams(queryPart).get('id');
+        if (id) return id;
+      }
+    }
+    return null;
+  };
+
   const initialRoute = getInitialRoute();
   const [currentRoute, setCurrentRoute] = useState<PageRoute>(initialRoute);
   const [portalType, setPortalType] = useState<PortalType>('citizen');
@@ -174,7 +189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [historyStack, setHistoryStack] = useState<{ route: PageRoute; complaintId?: string }[]>([
     { route: initialRoute }
   ]);
-  const [selectedComplaintId, setSelectedComplaintId] = useState<string | null>(null);
+  const [selectedComplaintId, setSelectedComplaintId] = useState<string | null>(getInitialComplaintId());
   const [selectedCallId, setSelectedCallId] = useState<string>('call-1');
   const [selectedExceptionId, setSelectedExceptionId] = useState<string | null>('exc-1');
   const [user, setUser] = useState<UserProfile | null>(null);

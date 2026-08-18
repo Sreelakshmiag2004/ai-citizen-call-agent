@@ -37,7 +37,13 @@ export const ComplaintTrackingPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedComplaintId]);
 
-  const complaint = complaints.find(c => c.id === selectedComplaintId) || complaints[0];
+  // If a specific complaint was requested (deep link, refresh, or a click
+  // from another page), only ever show that one -- never silently
+  // substitute a different complaint when it isn't found. Falling back to
+  // complaints[0] is only correct when no specific complaint was requested.
+  const complaint = selectedComplaintId
+    ? complaints.find(c => c.id === selectedComplaintId)
+    : complaints[0];
 
   if (!complaint) {
     return (

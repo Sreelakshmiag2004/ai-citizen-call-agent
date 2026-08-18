@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,30 @@ DEPRECATED_MODELS = {
     "gemini-1.5-pro",
     "gemini-2.0-flash-exp",
 }
+
+# Bounded timeout/retry policy for Gemini calls. A per-attempt timeout keeps
+# a stalled connection from blocking a request indefinitely (the SDK default
+# is no timeout at all). Retries are limited to transient server errors
+# (408/5xx) -- 429 (quota exhausted) is deliberately excluded so it fails
+# fast instead of being retried into a longer wait.
+LLM_TIMEOUT_MS = int(os.getenv("LLM_TIMEOUT_MS", "15000"))
+LLM_RETRY_ATTEMPTS = int(os.getenv("LLM_RETRY_ATTEMPTS", "2"))
+LLM_RETRYABLE_STATUS_CODES = [408, 500, 502, 503, 504]
+
+
+class LLMQuotaExceededError(RuntimeError):
+    """Raised when the Gemini API reports quota/rate-limit exhaustion (HTTP 429).
+
+    Subclasses RuntimeError so any existing `except RuntimeError` handling
+    keeps working; callers that want to distinguish this case (e.g. to
+    return HTTP 429 instead of 500) can catch it explicitly.
+    """
+
+
+class LLMUnavailableError(RuntimeError):
+    """Raised when the Gemini API is temporarily unavailable (5xx) after the
+    bounded retry policy above, or when the request times out.
+    """
 
 SYSTEM_PROMPT = """You are an AI government citizen complaint classification system.
 Your job is to analyze unstructured citizen complaint transcripts (written in English, Tamil, Hindi, Telugu, Malayalam, Kannada, or any other language) and convert them into structured JSON.
@@ -105,7 +130,18 @@ class AnalysisService:
 
         raw_text = None
         try:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(
+                    timeout=LLM_TIMEOUT_MS,
+                    retry_options=types.HttpRetryOptions(
+                        attempts=LLM_RETRY_ATTEMPTS,
+                        http_status_codes=LLM_RETRYABLE_STATUS_CODES,
+                        initial_delay=1.0,
+                        max_delay=4.0,
+                    ),
+                ),
+            )
 
             # Use generate_content with an explicit system_instruction and
             # response_mime_type="application/json" as the ONLY path.
@@ -137,9 +173,15 @@ class AnalysisService:
             )
             raw_text = response.text
 
+        except APIError as e:
+            if e.code == 429:
+                logger.warning("Gemini quota/rate limit exceeded (model=%s): %s", model_name, e)
+                raise LLMQuotaExceededError("LLM quota exceeded. Please try again later.") from e
+            logger.exception("Gemini API error (code=%s)", getattr(e, "code", "?"))
+            raise LLMUnavailableError("LLM service is temporarily unavailable. Please try again later.") from e
         except Exception as e:
             logger.exception("LLM API call failed: %s", str(e))
-            raise RuntimeError("LLM API request failed. Please check your API key or model configuration.") from e
+            raise LLMUnavailableError("LLM API request timed out or failed. Please try again later.") from e
 
         if not raw_text:
             raise ValueError("Empty response received from LLM.")
