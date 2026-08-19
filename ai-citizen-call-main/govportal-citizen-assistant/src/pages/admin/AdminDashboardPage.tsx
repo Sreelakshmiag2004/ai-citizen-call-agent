@@ -13,15 +13,75 @@ import {
   Loader2,
 } from 'lucide-react';
 import * as api from '../../services/api';
-import { AnalyticsSummary, DepartmentBreakdownItem, SLASummary } from '../../types';
+import {
+  AnalyticsSummary,
+  CategoryBreakdownItem,
+  DepartmentBreakdownItem,
+  PriorityBreakdownItem,
+  SLASummary,
+  StatusBreakdown,
+} from '../../types';
 
 const DEPT_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#6366F1', '#EF4444', '#64748B', '#0EA5E9', '#A855F7'];
+
+// Fixed severity/workflow order + color so these breakdowns render
+// consistently regardless of what order the backend returns them in.
+// Colors reuse the same Tailwind palette already used elsewhere on this
+// page (rose/orange/amber/emerald for priority, slate/blue/indigo/emerald
+// for status) so the new panels match the existing design system.
+const PRIORITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const PRIORITY_COLORS: Record<string, string> = {
+  CRITICAL: '#E11D48',
+  HIGH: '#F97316',
+  MEDIUM: '#F59E0B',
+  LOW: '#10B981',
+};
+
+const STATUS_ORDER = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
+const STATUS_COLORS: Record<string, string> = {
+  PENDING: '#94A3B8',
+  ASSIGNED: '#3B82F6',
+  IN_PROGRESS: '#6366F1',
+  RESOLVED: '#10B981',
+  CLOSED: '#475569',
+};
+
+// Shared row renderer for the three breakdown panels below (Category,
+// Priority, Status) -- a colored dot + label + count + a proportional bar,
+// matching the existing Department Workload panel's visual language.
+const BreakdownRow: React.FC<{ label: string; count: number; total: number; color: string }> = ({
+  label,
+  count,
+  total,
+  color,
+}) => {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="flex items-center gap-2 text-slate-700 font-medium truncate">
+          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+          <span className="truncate">{label.replace(/_/g, ' ')}</span>
+        </span>
+        <span className="font-bold text-slate-900 shrink-0">
+          {count} <span className="text-slate-400 font-normal">({pct}%)</span>
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+      </div>
+    </div>
+  );
+};
 
 export const AdminDashboardPage: React.FC = () => {
   const { navigate } = useApp();
   const [reportsOpen, setReportsOpen] = useState(false);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [departments, setDepartments] = useState<DepartmentBreakdownItem[]>([]);
+  const [categories, setCategories] = useState<CategoryBreakdownItem[]>([]);
+  const [priorities, setPriorities] = useState<PriorityBreakdownItem[]>([]);
+  const [statusBreakdown, setStatusBreakdown] = useState<StatusBreakdown | null>(null);
   const [slaSummary, setSlaSummary] = useState<SLASummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,11 +89,21 @@ export const AdminDashboardPage: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([api.getAnalyticsSummary(), api.getAnalyticsDepartments(), api.getSLASummary()])
-      .then(([s, d, sla]) => {
+    Promise.all([
+      api.getAnalyticsSummary(),
+      api.getAnalyticsDepartments(),
+      api.getAnalyticsCategories(),
+      api.getAnalyticsPriorities(),
+      api.getAnalyticsStatus(),
+      api.getSLASummary(),
+    ])
+      .then(([s, d, c, p, st, sla]) => {
         if (cancelled) return;
         setSummary(s);
         setDepartments(d);
+        setCategories(c);
+        setPriorities(p);
+        setStatusBreakdown(st);
         setSlaSummary(sla);
         setError(null);
       })
@@ -250,6 +320,88 @@ export const AdminDashboardPage: React.FC = () => {
                     {d.count} <span className="text-slate-400 font-normal">({totalDeptComplaints > 0 ? Math.round((d.count / totalDeptComplaints) * 100) : 0}%)</span>
                   </span>
                 </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Row 3b: Complaint Breakdown — Category / Priority / Status.
+          Real data from /analytics/categories, /analytics/priorities and
+          /analytics/status (analytics_service.py), rendered with the same
+          dot + count(%) + bar language as the Department Workload panel
+          above so all four breakdowns read as one consistent system. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-2xs">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-slate-900">Complaints by Category</h3>
+            <p className="text-[11px] text-slate-500">Real complaint counts per AI-classified category</p>
+          </div>
+          {categories.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              {loading ? 'Loading…' : 'No data available'}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {categories.slice(0, 8).map((c, i) => (
+                <BreakdownRow
+                  key={c.category}
+                  label={c.category}
+                  count={c.count}
+                  total={categories.reduce((sum, x) => sum + x.count, 0)}
+                  color={DEPT_COLORS[i % DEPT_COLORS.length]}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-2xs">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-slate-900">Complaints by Priority</h3>
+            <p className="text-[11px] text-slate-500">Real severity distribution across all complaints</p>
+          </div>
+          {priorities.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              {loading ? 'Loading…' : 'No data available'}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {PRIORITY_ORDER.map((p) => {
+                const item = priorities.find((x) => x.priority === p);
+                return (
+                  <BreakdownRow
+                    key={p}
+                    label={p}
+                    count={item?.count ?? 0}
+                    total={summary?.total_complaints ?? 0}
+                    color={PRIORITY_COLORS[p]}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-2xs">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-slate-900">Complaints by Status</h3>
+            <p className="text-[11px] text-slate-500">Real workflow-stage distribution across all complaints</p>
+          </div>
+          {!statusBreakdown ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              {loading ? 'Loading…' : 'No data available'}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {STATUS_ORDER.map((s) => (
+                <BreakdownRow
+                  key={s}
+                  label={s}
+                  count={statusBreakdown[s] ?? 0}
+                  total={summary?.total_complaints ?? 0}
+                  color={STATUS_COLORS[s]}
+                />
               ))}
             </div>
           )}
