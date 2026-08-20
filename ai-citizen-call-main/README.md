@@ -48,4 +48,20 @@ Citizen Voice / Phone Call
      Analytics Layer
           │
           ▼
-   React Operations Dashboard 
+   React Operations Dashboard
+```
+
+---
+
+## Quick Start (local development, Windows)
+
+Prerequisites: the backend virtual environment already created at `backend/.venv` (with its dependencies installed) and `npm install` already run once in `govportal-citizen-assistant/`.
+
+Run **`start-dev.bat`** from the repo root (double-click it, or `start-dev.bat` from a terminal). It opens two separate windows and leaves both running:
+
+- **Backend** — FastAPI on `http://localhost:8001` (`backend/.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8001`, run from `backend/`)
+- **Frontend** — Vite dev server on `http://localhost:3000` (`npm run dev`, run from `govportal-citizen-assistant/`)
+
+Close a window (or Ctrl+C inside it) to stop that process; the other keeps running independently.
+
+Twilio/ngrok is **not** started by this script — that remains a separate, optional manual step for demoing the real phone-call path (see `MASTER_TODO.md`'s Twilio items).

@@ -176,9 +176,27 @@ export function logoutBackend(): Promise<{ message: string }> {
 // Module 1 — Transcription
 // ----------------------------------------------------------------------------
 
-export function transcribeAudio(file: File | Blob, filename = 'recording.webm'): Promise<TranscribeResult> {
+// Maps a recorded audio Blob's actual MIME type (as MediaRecorder set it --
+// e.g. "audio/webm;codecs=opus" on Chrome/Edge, or "audio/mp4" on Safari,
+// which doesn't support audio/webm) to a filename whose extension matches
+// what the bytes actually are. This matters because the backend's upload
+// validation (validate_and_read_audio_file) checks the real file signature
+// against the claimed extension, not the browser's Content-Type header --
+// a mismatched extension (e.g. MP4 bytes named "recording.webm") is
+// correctly rejected with 400, which is exactly what happened on Safari
+// before this existed. Falls back to '.webm' only for an empty/unrecognized
+// type, matching the previous default and Chrome/Edge's actual output.
+export function filenameForAudioBlob(blob: Blob, baseName = 'recording'): string {
+  const type = (blob.type || '').toLowerCase();
+  if (type.includes('mp4') || type.includes('m4a')) return `${baseName}.mp4`;
+  if (type.includes('wav')) return `${baseName}.wav`;
+  if (type.includes('mpeg') || type.includes('mp3')) return `${baseName}.mp3`;
+  return `${baseName}.webm`;
+}
+
+export function transcribeAudio(file: File | Blob, filename?: string): Promise<TranscribeResult> {
   const form = new FormData();
-  form.append('file', file, filename);
+  form.append('file', file, filename || filenameForAudioBlob(file));
   return request<TranscribeResult>('/transcribe', { method: 'POST', body: form });
 }
 
@@ -322,9 +340,9 @@ export function getComplaintFeedback(complaintId: string): Promise<BackendFeedba
 // The single convenience endpoint that runs the entire audio pipeline
 // (Whisper -> LLM -> ChromaDB duplicate detection -> complaint/ticket/SLA)
 // in one call. Used where a two-phase editable review isn't needed.
-export function processAudioComplaint(file: Blob, filename = 'recording.webm'): Promise<ProcessAndCreateTicketResult> {
+export function processAudioComplaint(file: Blob, filename?: string): Promise<ProcessAndCreateTicketResult> {
   const form = new FormData();
-  form.append('file', file, filename);
+  form.append('file', file, filename || filenameForAudioBlob(file));
   return request<ProcessAndCreateTicketResult>('/process-and-create-ticket', {
     method: 'POST',
     body: form,

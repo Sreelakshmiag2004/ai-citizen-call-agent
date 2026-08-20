@@ -638,7 +638,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     try {
       setComplaintDraft((prev) => ({ ...prev, processingStage: 'transcribing' }));
-      const transcribed = await api.transcribeAudio(audioBlob, 'recording.webm');
+      // No filename override -- api.transcribeAudio derives the correct
+      // extension from audioBlob.type itself (see filenameForAudioBlob),
+      // since VoiceRecordingStep.tsx's MediaRecorder may have actually
+      // produced audio/mp4 (Safari) rather than audio/webm (Chrome/Edge).
+      const transcribed = await api.transcribeAudio(audioBlob);
       const transcript = (transcribed.transcript || '').trim() || 'No speech detected in recording.';
       setComplaintDraft((prev) => ({ ...prev, language: transcribed.language }));
       await runAnalysisAndDuplicateCheck(transcript);
