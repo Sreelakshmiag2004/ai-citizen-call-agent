@@ -46,6 +46,7 @@ IN_PROCESS_MODULES = [
     "test_audio_validation",
     "test_groq_provider",
     "test_module8",
+    "test_gps_location",
     # Runs last, deliberately: it's the only module that turns rate
     # limiting ON (everything else runs with it off, see test_config.py),
     # and restores the "off" default in a finally block afterward -- last

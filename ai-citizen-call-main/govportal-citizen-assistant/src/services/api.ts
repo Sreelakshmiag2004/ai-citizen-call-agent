@@ -226,6 +226,13 @@ export interface CreateComplaintPayload {
   department?: string;
   priority?: string;
   location?: string | null;
+  // Optional device GPS, captured only if the citizen explicitly opted in
+  // via ReviewComplaintStep's "Use my current location" action. Distinct
+  // from `location` above (the AI-extracted reported place name), which is
+  // unaffected by these.
+  latitude?: number | null;
+  longitude?: number | null;
+  location_accuracy_m?: number | null;
   keywords?: string[];
   duplicate_status?: string;
   duplicate_of?: string | null;

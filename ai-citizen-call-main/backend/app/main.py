@@ -14,6 +14,7 @@ from app.database.database import (
     SessionLocal,
     engine,
     ensure_created_by_user_id_column,
+    ensure_gps_columns,
     ensure_keywords_column,
 )
 from app.routes.analysis import router as analysis_router
@@ -38,6 +39,7 @@ def _init_db() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_keywords_column()
     ensure_created_by_user_id_column()
+    ensure_gps_columns()
     db = SessionLocal()
     try:
         seed_demo_users(db)

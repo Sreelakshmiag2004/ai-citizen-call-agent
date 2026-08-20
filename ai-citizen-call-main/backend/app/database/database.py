@@ -58,3 +58,22 @@ def ensure_created_by_user_id_column() -> None:
         if columns and "created_by_user_id" not in columns:
             conn.exec_driver_sql("ALTER TABLE complaints ADD COLUMN created_by_user_id INTEGER")
             conn.commit()
+
+
+def ensure_gps_columns() -> None:
+    """Additive, non-destructive migration for pre-existing SQLite files
+    that predate the optional citizen-GPS columns (latitude, longitude,
+    location_accuracy_m -- see Complaint in models.py; distinct from the
+    pre-existing AI-extracted `location` text field, which is untouched).
+    Same pattern as ensure_keywords_column() above -- a no-op once the
+    columns exist, including on a brand-new database where create_all()
+    already includes them. Existing rows get NULL for all three, which is
+    valid: GPS was never captured for them."""
+    with engine.connect() as conn:
+        columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(complaints)")]
+        if not columns:
+            return
+        for column_name in ("latitude", "longitude", "location_accuracy_m"):
+            if column_name not in columns:
+                conn.exec_driver_sql(f"ALTER TABLE complaints ADD COLUMN {column_name} REAL")
+        conn.commit()

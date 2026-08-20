@@ -40,6 +40,17 @@ class Complaint(Base):
     priority = Column(String, default="MEDIUM")
     summary = Column(Text, nullable=False)
     location = Column(String, nullable=True)
+    # Optional device GPS, distinct from `location` above (which is the
+    # AI-extracted/reported place name from the transcript, e.g. "Anna
+    # Nagar" -- unchanged). Only ever populated for browser-submitted
+    # text/voice complaints where the citizen explicitly opted in via
+    # ReviewComplaintStep.tsx's "Use my current location" action; NULL for
+    # every other case (including all Twilio phone-call complaints, which
+    # have no browser to request it from). `location_accuracy_m` is the
+    # browser Geolocation API's own reported accuracy radius in meters.
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    location_accuracy_m = Column(Float, nullable=True)
     keywords = Column(Text, nullable=True)  # JSON-encoded list[str] from Module 2 analysis
     status = Column(String, default="PENDING", nullable=False)
     # Which authenticated user submitted this complaint (nullable so the 3

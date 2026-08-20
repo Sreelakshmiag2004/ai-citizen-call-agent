@@ -35,6 +35,13 @@ class ComplaintCreate(BaseModel):
     priority: Optional[str] = Field("MEDIUM", description="Complaint priority")
     summary: str = Field(..., description="Summary of the complaint")
     location: Optional[str] = Field(None, description="Location of issue")
+    # Optional device GPS -- distinct from `location` above, which stays
+    # the AI-extracted/reported place name and is unaffected by these.
+    # Only ever sent by browser-submitted text/voice complaints where the
+    # citizen explicitly opted in; absent/null for Twilio-originated ones.
+    latitude: Optional[float] = Field(None, ge=-90, le=90, description="Optional device GPS latitude")
+    longitude: Optional[float] = Field(None, ge=-180, le=180, description="Optional device GPS longitude")
+    location_accuracy_m: Optional[float] = Field(None, ge=0, description="Optional GPS accuracy radius in meters")
     keywords: Optional[List[str]] = Field(None, description="AI-extracted keywords")
     duplicate_status: Optional[str] = Field(
         "NEW", description="Duplicate status (NEW, RELATED, DUPLICATE)"
@@ -90,6 +97,9 @@ class ComplaintResponse(BaseModel):
     priority: str
     summary: str
     location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_accuracy_m: Optional[float] = None
     keywords: List[str] = Field(default_factory=list)
     status: str
     duplicate_status: str

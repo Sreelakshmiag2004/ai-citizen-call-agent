@@ -8,6 +8,7 @@ explicitly a separate, future, authenticated capability, not implemented
 here.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,7 +29,13 @@ async def chatbot_message(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Message is required and cannot be empty.")
 
     try:
-        result = answer_question(request.message.strip())
+        # answer_question() does synchronous, blocking work (SentenceTransformer
+        # embedding, a ChromaDB query, and a blocking Groq SDK call) -- run it
+        # in a worker thread so it doesn't block the event loop for every
+        # other concurrent request, matching the asyncio.to_thread pattern
+        # every other AI-cost route already uses (see app/routes/transcription.py,
+        # analysis.py, duplicate.py, complaints.py's run_audio_pipeline).
+        result = await asyncio.to_thread(answer_question, request.message.strip())
         return ChatResponse(**result)
     except LLMQuotaExceededError as e:
         raise HTTPException(status_code=429, detail=str(e))

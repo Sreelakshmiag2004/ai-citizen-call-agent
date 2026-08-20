@@ -250,6 +250,14 @@ export interface BackendComplaint {
   priority: string;
   summary: string;
   location?: string | null;
+  // Optional device GPS, distinct from `location` above (the AI-extracted
+  // reported place name). Only ever present for browser-submitted
+  // text/voice complaints where the citizen explicitly opted in via
+  // ReviewComplaintStep's "Use my current location" action; null for every
+  // other case, including all Twilio phone-call complaints.
+  latitude?: number | null;
+  longitude?: number | null;
+  location_accuracy_m?: number | null;
   keywords: string[];
   status: string;
   duplicate_status: string;

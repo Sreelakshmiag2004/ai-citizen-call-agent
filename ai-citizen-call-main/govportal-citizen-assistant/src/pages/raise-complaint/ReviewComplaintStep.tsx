@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   ShieldCheck,
   Loader2,
+  LocateFixed,
+  CheckCircle2,
 } from 'lucide-react';
 import { PriorityLevel } from '../../types';
 
@@ -30,7 +32,55 @@ export const ReviewComplaintStep: React.FC = () => {
   const [description, setDescription] = useState(complaintDraft.description || '');
   const [attachments, setAttachments] = useState<string[]>(complaintDraft.attachments || []);
 
+  // ---- Optional device GPS capture. Never requested automatically --
+  // only in response to the citizen clicking "Use my current location"
+  // below. Seeded from complaintDraft in case the citizen already
+  // captured it before navigating back to an earlier step. ----
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'requesting' | 'success' | 'error'>(
+    complaintDraft.gpsLatitude != null && complaintDraft.gpsLongitude != null ? 'success' : 'idle'
+  );
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(
+    complaintDraft.gpsLatitude != null && complaintDraft.gpsLongitude != null
+      ? { lat: complaintDraft.gpsLatitude, lng: complaintDraft.gpsLongitude, accuracy: complaintDraft.gpsAccuracyM ?? 0 }
+      : null
+  );
+  const [gpsError, setGpsError] = useState<string | null>(null);
+
   const isSubmitting = complaintDraft.processingStage === 'submitting';
+
+  const handleUseCurrentLocation = () => {
+    if (!('geolocation' in navigator)) {
+      setGpsStatus('error');
+      setGpsError('Location services are not available in this browser.');
+      return;
+    }
+    setGpsStatus('requesting');
+    setGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        // Never logged -- coordinates stay in component state and are only
+        // ever sent to the backend as part of the final complaint payload.
+        setGpsCoords({ lat: latitude, lng: longitude, accuracy });
+        setGpsStatus('success');
+      },
+      (err) => {
+        setGpsStatus('error');
+        setGpsError(
+          err.code === err.PERMISSION_DENIED
+            ? 'Location permission was denied. You can still submit your complaint without it.'
+            : 'Unable to determine your location. You can try again or continue without it.'
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
+
+  const handleClearLocation = () => {
+    setGpsCoords(null);
+    setGpsStatus('idle');
+    setGpsError(null);
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -49,6 +99,9 @@ export const ReviewComplaintStep: React.FC = () => {
       location,
       description,
       attachments,
+      gpsLatitude: gpsCoords?.lat,
+      gpsLongitude: gpsCoords?.lng,
+      gpsAccuracyM: gpsCoords?.accuracy,
     });
   };
 
@@ -228,6 +281,76 @@ export const ReviewComplaintStep: React.FC = () => {
                 className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:border-[#003B95] focus:bg-white text-slate-800"
               />
             </div>
+          </div>
+
+          {/* Optional device GPS location capture -- separate from the
+              reported Location field above, which is left untouched. */}
+          <div className="md:col-span-2 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="max-w-md">
+                <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <LocateFixed className="w-3.5 h-3.5 text-[#003B95]" />
+                  Share your precise GPS location <span className="text-slate-400 font-normal">(Optional)</span>
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                  Sharing your device's exact location can help responders find the issue faster.
+                  This is completely optional, is only used to help resolve this complaint, and you
+                  can still submit without it.
+                </p>
+              </div>
+              {gpsStatus !== 'success' && (
+                <button
+                  type="button"
+                  id="use-current-location-btn"
+                  onClick={handleUseCurrentLocation}
+                  disabled={gpsStatus === 'requesting'}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-[#003B95] hover:bg-blue-50 transition-colors disabled:opacity-60"
+                >
+                  {gpsStatus === 'requesting' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Getting location…
+                    </>
+                  ) : (
+                    <>
+                      <LocateFixed className="w-3.5 h-3.5" />
+                      Use my current location
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {gpsStatus === 'success' && gpsCoords && (
+              <div className="flex items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Location captured (accuracy ±{Math.round(gpsCoords.accuracy)}m)
+                </span>
+                <button
+                  type="button"
+                  id="remove-current-location-btn"
+                  onClick={handleClearLocation}
+                  className="text-[11px] font-bold text-slate-500 hover:text-slate-700 underline shrink-0"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {gpsStatus === 'error' && (
+              <div className="flex items-center justify-between gap-3 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                <span className="text-[11px] font-semibold text-rose-700">{gpsError}</span>
+                <button
+                  type="button"
+                  id="retry-current-location-btn"
+                  onClick={handleUseCurrentLocation}
+                  className="text-[11px] font-bold text-[#003B95] hover:underline shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Detailed Description / real transcript */}

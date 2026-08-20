@@ -54,6 +54,15 @@ export interface ComplaintDraft {
   attachments: string[];
   submittedComplaintId?: string;
 
+  // ---- Optional device GPS, captured only if the citizen explicitly
+  // clicks "Use my current location" in ReviewComplaintStep. Distinct from
+  // `location` above (the AI-extracted/reported place name), which this
+  // never overwrites. Left undefined for Twilio complaints (no browser
+  // flow) and whenever the citizen doesn't opt in. ----
+  gpsLatitude?: number;
+  gpsLongitude?: number;
+  gpsAccuracyM?: number;
+
   // ---- Real AI pipeline state (populated by the backend, not simulated) ----
   transcript?: string;
   language?: string;
@@ -671,6 +680,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         department: draft.department,
         priority: backendPriorityFromUI(draft.priority),
         location: draft.location || null,
+        latitude: draft.gpsLatitude ?? null,
+        longitude: draft.gpsLongitude ?? null,
+        location_accuracy_m: draft.gpsAccuracyM ?? null,
         keywords: draft.keywords,
         duplicate_status: draft.duplicateStatus || 'NEW',
         duplicate_of: draft.duplicateOf || null,
