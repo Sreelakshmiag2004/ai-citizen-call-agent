@@ -3,14 +3,17 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from app.core.rate_limit import ai_rate_limit
+from app.database.models import User
 from app.services.analysis_service import (
     LLMQuotaExceededError,
     LLMUnavailableError,
     analysis_service,
 )
+from app.services.audio_validation import validate_and_read_audio_file
 from app.services.whisper_service import whisper_service
 
 logger = logging.getLogger(__name__)
@@ -19,28 +22,16 @@ router = APIRouter()
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = BACKEND_DIR / "uploads"
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".mp4"}
 
 
 class AnalyzeRequest(BaseModel):
     transcript: str = Field(..., description="Transcript text of the citizen complaint")
 
 
-def _validate_audio_file(file: UploadFile) -> None:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided.")
-
-    extension = Path(file.filename).suffix.lower()
-    if extension not in ALLOWED_EXTENSIONS:
-        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format. Allowed formats: {allowed}",
-        )
-
-
 @router.post("/analyze")
-async def analyze_transcript(request: AnalyzeRequest) -> Dict[str, Any]:
+async def analyze_transcript(
+    request: AnalyzeRequest, current_user: User = Depends(ai_rate_limit)
+) -> Dict[str, Any]:
     if not request.transcript or not request.transcript.strip():
         raise HTTPException(
             status_code=400,
@@ -69,19 +60,18 @@ async def analyze_transcript(request: AnalyzeRequest) -> Dict[str, Any]:
 
 
 @router.post("/process-complaint")
-async def process_complaint(file: UploadFile = File(...)) -> Dict[str, Any]:
-    _validate_audio_file(file)
+async def process_complaint(
+    file: UploadFile = File(...), current_user: User = Depends(ai_rate_limit)
+) -> Dict[str, Any]:
+    # Validates filename/extension/size/content BEFORE anything derived
+    # from the (possibly absent/malicious) filename is touched.
+    contents = await validate_and_read_audio_file(file)
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
     safe_filename = Path(file.filename).name
     file_path = UPLOAD_DIR / safe_filename
 
     try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
         file_path.write_bytes(contents)
 
         stt_result = await asyncio.to_thread(

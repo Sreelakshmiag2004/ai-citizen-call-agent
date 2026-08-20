@@ -5,13 +5,25 @@ import { AssistantChatbot } from '../components/chatbot/AssistantChatbot';
 
 export const LoginPage: React.FC = () => {
   const { login, navigate } = useApp();
-  const [emailOrPhone, setEmailOrPhone] = useState('99876 54321');
-  const [password, setPassword] = useState('••••••••');
+  // Pre-filled with the seeded demo citizen account (see
+  // backend/app/services/user_service.py's DEMO_ACCOUNTS) so the portal
+  // stays click-through demoable; any registered account's real email +
+  // password works here too.
+  const [emailOrPhone, setEmailOrPhone] = useState('ravi.kumar@citizen.gov.in');
+  const [password, setPassword] = useState('Citizen@123');
   const [rememberMe, setRememberMe] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login({ emailOrPhone, password });
+    setError(null);
+    setIsSubmitting(true);
+    const result = await login({ email: emailOrPhone, password });
+    setIsSubmitting(false);
+    if (!result.ok) {
+      setError(result.error);
+    }
   };
 
   return (
@@ -39,18 +51,27 @@ export const LoginPage: React.FC = () => {
 
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="w-full space-y-4">
-          {/* Mobile / Email */}
+          {error && (
+            <div
+              id="login-error-banner"
+              className="px-3 py-2.5 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-lg"
+            >
+              {error}
+            </div>
+          )}
+
+          {/* Email */}
           <div>
             <label htmlFor="login-identifier-input" className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Mobile Number / Email
+              Email
             </label>
             <input
               id="login-identifier-input"
-              type="text"
+              type="email"
               required
               value={emailOrPhone}
               onChange={(e) => setEmailOrPhone(e.target.value)}
-              placeholder="Enter registered mobile number or email"
+              placeholder="Enter registered email"
               className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#003B95] focus:ring-1 focus:ring-[#003B95] transition-all text-slate-800 placeholder:text-slate-400"
             />
           </div>
@@ -98,25 +119,10 @@ export const LoginPage: React.FC = () => {
           <button
             id="login-submit-btn"
             type="submit"
-            className="w-full py-2.5 bg-[#003B95] hover:bg-[#002D72] text-white font-bold text-sm rounded-lg shadow-sm transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer"
+            disabled={isSubmitting}
+            className="w-full py-2.5 bg-[#003B95] hover:bg-[#002D72] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-sm rounded-lg shadow-sm transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer"
           >
-            <span>Login</span>
-          </button>
-
-          {/* Divider */}
-          <div className="relative flex items-center justify-center my-3">
-            <div className="border-t border-slate-200 w-full" />
-            <span className="bg-white px-3 text-xs text-slate-400 font-medium">or</span>
-          </div>
-
-          {/* Login with OTP */}
-          <button
-            id="login-otp-btn"
-            type="button"
-            onClick={() => login({ emailOrPhone })}
-            className="w-full py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-sm rounded-lg transition-all shadow-2xs cursor-pointer"
-          >
-            Login with OTP
+            <span>{isSubmitting ? 'Logging in…' : 'Login'}</span>
           </button>
         </form>
 

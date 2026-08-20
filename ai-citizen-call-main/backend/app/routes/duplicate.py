@@ -3,9 +3,12 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.auth.dependencies import require_role
+from app.core.rate_limit import ai_rate_limit
+from app.database.models import User
 from app.services.chroma_service import chroma_service
 from app.services.duplicate_service import duplicate_service
 
@@ -27,7 +30,9 @@ class DuplicateCheckRequest(BaseModel):
 
 
 @router.post("/duplicate-check")
-async def duplicate_check(request: DuplicateCheckRequest) -> Dict[str, Any]:
+async def duplicate_check(
+    request: DuplicateCheckRequest, current_user: User = Depends(ai_rate_limit)
+) -> Dict[str, Any]:
     if not request.transcript or not request.transcript.strip():
         raise HTTPException(
             status_code=400,
@@ -64,8 +69,9 @@ async def duplicate_check(request: DuplicateCheckRequest) -> Dict[str, Any]:
 
 
 @router.post("/clear-complaints")
-async def clear_complaints() -> Dict[str, Any]:
-    """Helper endpoint to reset the ChromaDB vector database for testing/demos."""
+async def clear_complaints(current_user: User = Depends(require_role("admin"))) -> Dict[str, Any]:
+    """Helper endpoint to reset the ChromaDB vector database for testing/demos.
+    Admin-only -- this is destructive and irreversible."""
     try:
         await asyncio.to_thread(chroma_service.clear_collection)
         return {"message": "ChromaDB collection cleared successfully."}

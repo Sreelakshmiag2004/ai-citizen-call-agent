@@ -10,6 +10,7 @@ export const AssistantChatbot: React.FC = () => {
     setIsChatMinimized,
     toggleChat,
     chatMessages,
+    isChatLoading,
     sendChatMessage,
     handleChatAction,
     navigate,
@@ -46,11 +47,11 @@ export const AssistantChatbot: React.FC = () => {
     if (isChatOpen && !isChatMinimized) {
       scrollToBottom();
     }
-  }, [chatMessages, isChatOpen, isChatMinimized]);
+  }, [chatMessages, isChatLoading, isChatOpen, isChatMinimized]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputVal.trim()) return;
+    if (!inputVal.trim() || isChatLoading) return; // isChatLoading guard prevents a duplicate submit while one is in flight
     sendChatMessage(inputVal);
     setInputVal('');
   };
@@ -181,6 +182,16 @@ export const AssistantChatbot: React.FC = () => {
                             {msg.text}
                           </div>
 
+                          {/* RAG sources -- human-friendly knowledge-document
+                              titles only (see ChatMessage.sources); never a
+                              collection name, file path, or similarity score. */}
+                          {msg.sources && msg.sources.length > 0 && (
+                            <div className="px-1 text-[10px] text-slate-400">
+                              <span className="font-semibold text-slate-500">Sources:</span>{' '}
+                              {msg.sources.join(', ')}
+                            </div>
+                          )}
+
                           {/* Embedded Complaint Card */}
                           {msg.complaintCard && (
                             <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm space-y-2.5 animate-in fade-in zoom-in-95 duration-150">
@@ -226,7 +237,8 @@ export const AssistantChatbot: React.FC = () => {
                                 <button
                                   key={idx}
                                   onClick={() => handleChatAction(chip)}
-                                  className="w-full text-left px-3.5 py-2 rounded-full border border-[#003B95]/40 text-[#003B95] hover:bg-blue-50 hover:border-[#003B95] text-xs font-semibold transition-all bg-white shadow-2xs"
+                                  disabled={isChatLoading}
+                                  className="w-full text-left px-3.5 py-2 rounded-full border border-[#003B95]/40 text-[#003B95] hover:bg-blue-50 hover:border-[#003B95] text-xs font-semibold transition-all bg-white shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
                                 >
                                   {chip}
                                 </button>
@@ -247,6 +259,24 @@ export const AssistantChatbot: React.FC = () => {
                     )}
                   </div>
                 ))}
+
+                {/* Assistant typing/loading indicator -- shown while a real
+                    /chatbot/message request is in flight. Not a persisted
+                    ChatMessage; purely a transient render based on
+                    isChatLoading. */}
+                {isChatLoading && (
+                  <div id="chatbot-typing-indicator" className="flex items-start gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-[#003B95] text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="bg-white border border-slate-200/80 rounded-2xl rounded-tl-sm px-4 py-3 shadow-xs flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce [animation-delay:-0.3s]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce [animation-delay:-0.15s]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" />
+                    </div>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
 
@@ -262,13 +292,15 @@ export const AssistantChatbot: React.FC = () => {
                     type="text"
                     value={inputVal}
                     onChange={(e) => setInputVal(e.target.value)}
-                    placeholder="Type your message..."
-                    className="w-full pl-4 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-full focus:outline-none focus:border-[#003B95] focus:bg-white transition-all text-slate-800"
+                    placeholder={isChatLoading ? 'Waiting for a reply…' : 'Type your message...'}
+                    maxLength={500}
+                    disabled={isChatLoading}
+                    className="w-full pl-4 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-full focus:outline-none focus:border-[#003B95] focus:bg-white transition-all text-slate-800 disabled:opacity-60"
                   />
                   <button
                     id="chatbot-send-btn"
                     type="submit"
-                    disabled={!inputVal.trim()}
+                    disabled={!inputVal.trim() || isChatLoading}
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-[#003B95] hover:text-[#002D72] disabled:text-slate-300 transition-colors"
                   >
                     <Send className="w-4 h-4" />

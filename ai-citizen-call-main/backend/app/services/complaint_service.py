@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database.models import Complaint, StatusHistory, Ticket
 from app.database.schemas import VALID_DEPARTMENTS, VALID_PRIORITIES, VALID_STATUSES
 from app.services.department_routing import department_routing_service
+from app.services.feedback_service import feedback_service
 from app.services.sla_service import sla_service
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,19 @@ class ComplaintService:
             return parsed if isinstance(parsed, list) else []
         except (TypeError, ValueError):
             return []
+
+    def _feedback_dict(self, db: Session, complaint_id: str) -> Optional[Dict[str, Any]]:
+        fb = feedback_service.get_feedback(db, complaint_id)
+        if not fb:
+            return None
+        return {
+            "complaint_id": fb.complaint_id,
+            "user_id": fb.user_id,
+            "rating": fb.rating,
+            "comment": fb.comment,
+            "created_at": fb.created_at,
+            "updated_at": fb.updated_at,
+        }
 
     def _next_available_id(
         self, db: Session, id_column, prefix: str, start: int = 1001
@@ -112,6 +126,7 @@ class ComplaintService:
         similarity_score: Optional[float] = None,
         requested_complaint_id: Optional[str] = None,
         custom_created_at: Optional[datetime] = None,
+        created_by_user_id: Optional[int] = None,
     ) -> Tuple[Complaint, Ticket]:
         norm_dept = department_routing_service.normalize_department(department)
         
@@ -174,6 +189,7 @@ class ComplaintService:
                 was_breached=False,
                 created_at=created_at_dt,
                 updated_at=created_at_dt,
+                created_by_user_id=created_by_user_id,
             )
             new_ticket = Ticket(
                 ticket_id=tkt_id,
@@ -298,7 +314,9 @@ class ComplaintService:
             "was_breached": sla_state["was_breached"],
             "created_at": cmp_obj.created_at,
             "updated_at": cmp_obj.updated_at,
+            "created_by_user_id": cmp_obj.created_by_user_id,
             "ticket": ticket_data,
+            "feedback": self._feedback_dict(db, cmp_obj.complaint_id),
         }
 
     def list_complaints(
@@ -310,8 +328,15 @@ class ComplaintService:
         category: Optional[str] = None,
         location: Optional[str] = None,
         override_now: Optional[datetime] = None,
+        created_by_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         query = db.query(Complaint)
+
+        # Ownership scoping -- passed by the route only for citizens (see
+        # require_role/assert_can_access_complaint in app/auth/dependencies.py);
+        # staff roles call this with created_by_user_id=None and see everything.
+        if created_by_user_id is not None:
+            query = query.filter(Complaint.created_by_user_id == created_by_user_id)
 
         if department:
             norm_dept = department_routing_service.normalize_department(department)
@@ -373,7 +398,9 @@ class ComplaintService:
                     "was_breached": sla_state["was_breached"],
                     "created_at": c.created_at,
                     "updated_at": c.updated_at,
+                    "created_by_user_id": c.created_by_user_id,
                     "ticket": ticket_data,
+                    "feedback": self._feedback_dict(db, c.complaint_id),
                 }
             )
 

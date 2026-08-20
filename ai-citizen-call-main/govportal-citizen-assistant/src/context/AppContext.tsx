@@ -29,7 +29,10 @@ import {
 import * as api from '../services/api';
 import { ApiError } from '../services/api';
 import {
+  formatBackendDate,
   mapBackendComplaintToUI,
+  mapBackendNotificationToUI,
+  mapBackendUserToProfile,
   mapStatusHistoryToTimeline,
   mapUIStatusToBackend,
 } from '../services/adapters';
@@ -107,6 +110,7 @@ interface AppContextType {
   isChatOpen: boolean;
   isChatMinimized: boolean;
   chatMessages: ChatMessage[];
+  isChatLoading: boolean;
   isSidebarCollapsed: boolean;
   redirectTarget: { route: PageRoute; complaintId?: string } | null;
 
@@ -120,7 +124,14 @@ interface AppContextType {
   setUser: (user: UserProfile | null) => void;
   setRedirectTarget: (target: { route: PageRoute; complaintId?: string } | null) => void;
   toggleSidebarCollapse: () => void;
-  login: (credentials?: { emailOrPhone: string; password?: string; portalPreference?: PortalType }) => void;
+  // Real backend authentication (see backend/app/routes/auth.py). Resolves
+  // to an error message on failure instead of throwing, so callers can
+  // display it inline without a try/catch.
+  login: (credentials: { email: string; password: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
+  register: (
+    payload: { fullName: string; email: string; password: string; phone?: string }
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  authLoading: boolean;
   logout: () => void;
   switchPortal: (targetPortal: PortalType) => void;
 
@@ -135,7 +146,11 @@ interface AppContextType {
   startVoiceProcessing: (audioBlob: Blob) => Promise<void>;
   startTextProcessing: (overrideText?: string) => Promise<void>;
   confirmSubmitComplaint: (overrides?: Partial<ComplaintDraft>) => Promise<void>;
-  addComplaintFeedback: (complaintId: string, rating: number, comment: string) => void;
+  addComplaintFeedback: (
+    complaintId: string,
+    rating: number,
+    comment: string
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 
   // Notification Actions
   markAllNotificationsRead: () => void;
@@ -194,6 +209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedExceptionId, setSelectedExceptionId] = useState<string | null>('exc-1');
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
 
   // ---- Real backend complaint data (single source of truth for the whole app) ----
   const [complaints, setComplaints] = useState<Complaint[]>([]);
@@ -227,6 +243,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ]
     }
   ]);
+  // True while a /chatbot/message request is in flight -- guards against
+  // duplicate submissions (both here and via the input/send-button disabled
+  // state in AssistantChatbot.tsx) and drives the "assistant is typing"
+  // indicator.
+  const [isChatLoading, setIsChatLoading] = useState(false);
 
   // --------------------------------------------------------------------
   // Real backend data loading — GET /complaints is the single source of
@@ -254,9 +275,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  // GET /complaints now requires authentication (see MASTER_TODO.md's "No
+  // authentication/authorization anywhere" item) -- only fetch once a user
+  // is actually logged in (covers initial login, registration, and session
+  // rehydration from a stored token alike, since all three set `user`).
   useEffect(() => {
-    refreshComplaints();
-  }, [refreshComplaints]);
+    if (user) {
+      refreshComplaints();
+    }
+  }, [user, refreshComplaints]);
+
+  // --------------------------------------------------------------------
+  // Real backend notifications (see MASTER_TODO.md's "SLA breach/escalation
+  // has no actual delivery mechanism" item) -- currently populated only by
+  // SLA at-risk/breach escalation events, delivered to whichever portal(s)
+  // the backend actually addressed them to (the owning citizen, and
+  // officer/admin per escalation level; see notification_service.py).
+  // Call-center notifications have no backend source yet and keep using
+  // their existing mock data, unchanged.
+  const refreshNotifications = useCallback(async () => {
+    if (!user) return;
+    try {
+      const backendNotifs = await api.getNotifications();
+      const mapped = backendNotifs.map(mapBackendNotificationToUI);
+      if (portalType === 'officer') {
+        setOfficerNotifications(mapped);
+      } else if (portalType === 'admin') {
+        setAdminNotifications(mapped);
+      } else if (portalType === 'citizen') {
+        setNotifications(mapped);
+      }
+      // call-center: intentionally left on mock data (see comment above).
+    } catch {
+      // Notifications failing to load shouldn't break the rest of the app;
+      // the portal simply keeps whatever it last had (mock data on first
+      // load).
+    }
+  }, [user, portalType]);
+
+  useEffect(() => {
+    refreshNotifications();
+  }, [refreshNotifications]);
 
   const fetchComplaintDetails = useCallback(async (complaintId: string) => {
     try {
@@ -376,62 +435,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ------------------------------------------------------------------
-  // DEMO AUTHENTICATION. The backend does not expose a verified auth API
-  // (no login/JWT/session endpoint). Portal routing here is a client-side
-  // demo convenience keyed off the text typed into the login form — it is
-  // NOT tied to any real backend user/session, and no request the app
-  // makes carries an identity. See PHASE 17 in the integration brief.
+  // REAL AUTHENTICATION (see backend/app/routes/auth.py). The JWT the
+  // backend issues is the only thing that determines what a logged-in
+  // user is allowed to do -- every protected endpoint validates it and
+  // re-checks the role from the database on every request (see
+  // app/auth/dependencies.py). Nothing here on the frontend grants
+  // access; it only decides what to *render*, exactly as the task
+  // requires ("never rely on the React UI to enforce roles").
   // ------------------------------------------------------------------
-  const login = (credentials?: { emailOrPhone: string; password?: string; portalPreference?: PortalType }) => {
-    const rawInput = (credentials?.emailOrPhone || '').trim().toLowerCase();
-    const cleanDigits = rawInput.replace(/\D/g, '');
-
-    const isOfficerCandidate =
-      credentials?.portalPreference === 'officer' ||
-      rawInput.includes('officer') ||
-      rawInput.includes('pwd') ||
-      rawInput.includes('priya.sharma@pwd.gov.in') ||
-      rawInput.includes('pwd.gov.in') ||
-      rawInput.includes('pwd-eng') ||
-      rawInput.includes('engineer');
-
-    const isAdminCandidate =
-      credentials?.portalPreference === 'admin' ||
-      rawInput.includes('admin') ||
-      rawInput.includes('raj') ||
-      rawInput.includes('raj.kumar') ||
-      rawInput.includes('administrator') ||
-      rawInput === 'raj.kumar@gov.in' ||
-      cleanDigits === '9811122334';
-
-    const isCallCenterCandidate =
-      credentials?.portalPreference === 'call-center' ||
-      rawInput.includes('callcenter') ||
-      rawInput.includes('call-center') ||
-      rawInput.includes('executive') ||
-      rawInput.includes('agent') ||
-      rawInput.includes('intake') ||
-      rawInput === 'callcenter@gov.in';
-
-    let targetPortal: PortalType = 'citizen';
-    let targetUser: UserProfile = INITIAL_USER;
-
-    if (isOfficerCandidate) {
-      targetPortal = 'officer';
-      targetUser = OFFICER_USER;
-    } else if (isAdminCandidate) {
-      targetPortal = 'admin';
-      targetUser = ADMIN_USER;
-    } else if (isCallCenterCandidate) {
-      targetPortal = 'call-center';
-      targetUser = CALL_CENTER_USER;
-    } else {
-      targetPortal = 'citizen';
-      targetUser = INITIAL_USER;
-    }
-
-    setPortalType(targetPortal);
-    setUser(targetUser);
+  const _enterAfterAuth = (profile: UserProfile) => {
+    setPortalType((profile.portalType as PortalType) || 'citizen');
+    setUser(profile);
 
     // Return to the exact page or action the user originally clicked, or dashboard if none
     const dest = redirectTarget;
@@ -457,6 +471,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const login = async (credentials: { email: string; password: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const res = await api.login({ email: credentials.email, password: credentials.password });
+      api.setAuthToken(res.access_token);
+      _enterAfterAuth(mapBackendUserToProfile(res.user));
+      return { ok: true };
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Unable to reach the server. Please try again.';
+      return { ok: false, error: msg };
+    }
+  };
+
+  const register = async (
+    payload: { fullName: string; email: string; password: string; phone?: string }
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const res = await api.register({
+        email: payload.email,
+        password: payload.password,
+        full_name: payload.fullName,
+        phone: payload.phone,
+      });
+      api.setAuthToken(res.access_token);
+      _enterAfterAuth(mapBackendUserToProfile(res.user));
+      return { ok: true };
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Unable to reach the server. Please try again.';
+      return { ok: false, error: msg };
+    }
+  };
+
+  // Rehydrate the session on page load/refresh from a stored token, if any
+  // -- always re-verified against the backend rather than trusted as-is.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const token = api.getAuthToken();
+      if (!token) {
+        setAuthLoading(false);
+        return;
+      }
+      try {
+        const me = await api.getMe();
+        if (!cancelled) {
+          const profile = mapBackendUserToProfile(me);
+          setUser(profile);
+          setPortalType((profile.portalType as PortalType) || 'citizen');
+        }
+      } catch {
+        // Token missing/expired/invalid -- clear it rather than leaving the
+        // app in a state where API calls will keep 401ing silently.
+        api.clearAuthToken();
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const switchPortal = (targetPortal: PortalType) => {
     setPortalType(targetPortal);
     if (targetPortal === 'officer') {
@@ -472,6 +548,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    // Best-effort -- JWTs are stateless (see backend/app/routes/auth.py's
+    // logout endpoint), so this has nothing to wait on; the token is
+    // discarded client-side regardless of whether the call succeeds.
+    api.logoutBackend().catch(() => {});
+    api.clearAuthToken();
     setUser(null);
     setRedirectTarget(null);
     setHistoryStack([{ route: 'landing' }]);
@@ -625,24 +706,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const addComplaintFeedback = (complaintId: string, rating: number, comment: string) => {
-    // NOTE: the backend has no feedback endpoint — this is stored locally
-    // only, for demo purposes, and is not persisted server-side.
-    const now = new Date();
-    const formatted = `${now.getDate()} ${now.toLocaleString('default', { month: 'short' })} ${now.getFullYear()}, ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    setComplaints(prev => prev.map(c => {
-      if (c.id === complaintId) {
-        return {
-          ...c,
-          feedback: {
-            rating,
-            comment,
-            submittedAt: formatted,
-          }
-        };
-      }
-      return c;
-    }));
+  const addComplaintFeedback = async (
+    complaintId: string,
+    rating: number,
+    comment: string
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const saved = await api.submitComplaintFeedback(complaintId, { rating, comment: comment || undefined });
+      setComplaints((prev) =>
+        prev.map((c) =>
+          c.id === complaintId
+            ? {
+                ...c,
+                feedback: {
+                  rating: saved.rating,
+                  comment: saved.comment || '',
+                  submittedAt: formatBackendDate(saved.updated_at),
+                },
+              }
+            : c
+        )
+      );
+      return { ok: true };
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Unable to submit feedback. Please try again.';
+      return { ok: false, error: msg };
+    }
   };
 
   const endLiveCall = (callId: string) => {
@@ -660,24 +749,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const markAllNotificationsRead = () => {
     if (portalType === 'officer') {
       setOfficerNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      api.markAllNotificationsRead().catch(() => {});
     } else if (portalType === 'admin') {
       setAdminNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      api.markAllNotificationsRead().catch(() => {});
     } else if (portalType === 'call-center') {
+      // No backend source for call-center notifications yet -- local only.
       setCallCenterNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
     } else {
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      api.markAllNotificationsRead().catch(() => {});
     }
   };
 
   const markNotificationAsRead = (id: string) => {
     if (portalType === 'officer') {
       setOfficerNotifications(prev => prev.map(n => n.id === id ? ({ ...n, isRead: true }) : n));
+      api.markNotificationRead(Number(id)).catch(() => {});
     } else if (portalType === 'admin') {
       setAdminNotifications(prev => prev.map(n => n.id === id ? ({ ...n, isRead: true }) : n));
+      api.markNotificationRead(Number(id)).catch(() => {});
     } else if (portalType === 'call-center') {
+      // No backend source for call-center notifications yet -- local only.
       setCallCenterNotifications(prev => prev.map(n => n.id === id ? ({ ...n, isRead: true }) : n));
     } else {
       setNotifications(prev => prev.map(n => n.id === id ? ({ ...n, isRead: true }) : n));
+      api.markNotificationRead(Number(id)).catch(() => {});
     }
   };
 
@@ -686,90 +783,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsChatMinimized(false);
   };
 
+  // Maps a failed api.sendChatbotMessage() call to a short, user-friendly
+  // message -- never the raw error. In particular, a 422 (validation)
+  // response's `detail` is a Pydantic array of field-error objects, not a
+  // plain string; showing that directly would look like an internal
+  // error dump, so it gets its own friendly copy rather than falling
+  // through to `e.message`.
+  const chatbotErrorMessage = (e: unknown): string => {
+    if (e instanceof ApiError) {
+      if (e.status === 429) {
+        return e.message || "You're sending messages a bit too quickly. Please wait a moment and try again.";
+      }
+      if (e.status === 422) {
+        return 'Please ask a shorter question (under 500 characters).';
+      }
+      if (e.status === 400) {
+        return e.message || 'Please enter a question first.';
+      }
+      if (e.status === undefined) {
+        return 'Unable to reach the GovPortal Assistant right now. Please check your connection and try again.';
+      }
+    }
+    return "Sorry, I couldn't process that just now. Please try again in a moment.";
+  };
+
+  // REAL backend-answered chatbot (see backend/app/routes/chatbot.py) --
+  // public/unauthenticated RAG FAQ assistant. Every message, whether typed
+  // or from an action chip, goes through the same real call; there is no
+  // client-side keyword logic or fabricated complaint lookup left. If the
+  // citizen asks to track a specific complaint, this deliberately does NOT
+  // reach into `complaints` state -- the backend's own grounded response
+  // (it has no complaint/user data access at all) is shown as-is instead.
   const sendChatMessage = (text: string) => {
-    if (!text.trim()) return;
+    const trimmed = text.trim();
+    if (!trimmed || isChatLoading) return; // also guarded by the disabled input/button in AssistantChatbot.tsx
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
-      text: text.trim(),
+      text: trimmed,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-
     setChatMessages(prev => [...prev, userMsg]);
+    setIsChatLoading(true);
 
-    setTimeout(() => {
-      handleBotResponse(text.trim());
-    }, 600);
+    api.sendChatbotMessage(trimmed)
+      .then((result) => {
+        const botMsg: ChatMessage = {
+          id: `msg-${Date.now()}-bot`,
+          sender: 'bot',
+          text: result.reply,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          sources: result.sources,
+        };
+        setChatMessages(prev => [...prev, botMsg]);
+      })
+      .catch((e: unknown) => {
+        const botMsg: ChatMessage = {
+          id: `msg-${Date.now()}-error`,
+          sender: 'bot',
+          text: chatbotErrorMessage(e),
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setChatMessages(prev => [...prev, botMsg]);
+      })
+      .finally(() => {
+        setIsChatLoading(false);
+      });
   };
 
   const handleChatAction = (actionText: string) => {
     sendChatMessage(actionText);
-  };
-
-  const handleBotResponse = (userText: string) => {
-    const lower = userText.toLowerCase();
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    if (lower.includes('track') || lower.includes('status') || complaints.some(c => lower.includes(c.id.toLowerCase()))) {
-      const targetComplaint = complaints.find(c => lower.includes(c.id.toLowerCase())) || complaints[0];
-      if (!targetComplaint) {
-        const botMsg: ChatMessage = {
-          id: `msg-${Date.now()}`,
-          sender: 'bot',
-          text: "You don't have any complaints yet. Would you like to raise one?",
-          timestamp: timeStr,
-          actionChips: ['Raise a new complaint'],
-        };
-        setChatMessages(prev => [...prev, botMsg]);
-        return;
-      }
-      const botMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        sender: 'bot',
-        text: `Here is the current status of complaint ${targetComplaint.id}`,
-        timestamp: timeStr,
-        complaintCard: {
-          id: targetComplaint.id,
-          title: targetComplaint.title,
-          status: targetComplaint.status,
-          department: targetComplaint.department,
-          updatedOn: targetComplaint.updatedOn,
-        }
-      };
-      setChatMessages(prev => [...prev, botMsg]);
-    } else if (lower.includes('raise') || lower.includes('new complaint')) {
-      const botMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        sender: 'bot',
-        text: "You can raise a complaint using AI Voice Recording or Text Input. Would you like to launch the complaint submission form?",
-        timestamp: timeStr,
-        actionChips: ['Launch Raise Complaint', 'How does Voice AI work?']
-      };
-      setChatMessages(prev => [...prev, botMsg]);
-    } else if (lower.includes('launch raise complaint')) {
-      setIsChatOpen(false);
-      resetComplaintDraft();
-      navigate('raise-complaint');
-    } else if (lower.includes('how does the process work') || lower.includes('process')) {
-      const botMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        sender: 'bot',
-        text: "The GovPortal AI pipeline has 5 real stages:\n1. 🎙️ Speech-to-text (faster-whisper, multilingual)\n2. 🧠 LLM analysis (category, department, priority, summary)\n3. 🔎 Semantic duplicate detection (ChromaDB)\n4. 🏢 Department routing & ticket creation\n5. ⏱️ SLA deadline & escalation tracking",
-        timestamp: timeStr,
-        actionChips: ['Track my complaint', 'Raise a new complaint']
-      };
-      setChatMessages(prev => [...prev, botMsg]);
-    } else {
-      const botMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        sender: 'bot',
-        text: "I can help you raise complaints, track ongoing requests, check department contacts, or clarify civic procedures. What would you like to do?",
-        timestamp: timeStr,
-        actionChips: ['Track my complaint', 'Raise a new complaint', 'Contact Helpdesk']
-      };
-      setChatMessages(prev => [...prev, botMsg]);
-    }
   };
 
   return (
@@ -797,6 +881,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isChatOpen,
         isChatMinimized,
         chatMessages,
+        isChatLoading,
         isSidebarCollapsed,
         navigate,
         goBack,
@@ -809,6 +894,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRedirectTarget,
         toggleSidebarCollapse,
         login,
+        register,
+        authLoading,
         logout,
         switchPortal,
         refreshComplaints,

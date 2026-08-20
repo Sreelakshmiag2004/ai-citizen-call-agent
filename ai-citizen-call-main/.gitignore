@@ -4,3 +4,9 @@ venv/
 __pycache__/
 uploads/
 *.pyc
+
+# Isolated test DB/ChromaDB (see backend/test_config.py) -- disposable,
+# regenerated fresh on every test run, must never mix with presentation data.
+backend/data/test/
+# Pre-cleanup safety backups of the presentation DB/ChromaDB.
+backend/data/backups/

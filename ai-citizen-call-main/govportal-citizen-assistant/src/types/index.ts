@@ -265,6 +265,19 @@ export interface BackendComplaint {
   created_at: string;
   updated_at: string;
   ticket?: BackendTicket | null;
+  feedback?: BackendFeedback | null;
+}
+
+// Shape returned by POST/GET /complaints/{id}/feedback (see
+// backend/app/database/schemas.py's FeedbackResponse) and embedded in
+// BackendComplaint.feedback.
+export interface BackendFeedback {
+  complaint_id: string;
+  user_id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface BackendStatusHistoryItem {
@@ -419,6 +432,48 @@ export interface ProcessAndCreateTicketResult {
   };
 }
 
+// ----------------------------------------------------------------------------
+// Authentication -- shapes returned by POST /auth/register, /auth/login,
+// GET /auth/me (see backend/app/database/schemas.py's UserResponse /
+// TokenResponse). `role` matches PortalType exactly.
+// ----------------------------------------------------------------------------
+
+export interface BackendUser {
+  id: number;
+  email: string;
+  full_name: string;
+  phone: string | null;
+  role: PortalType;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in_minutes: number;
+  user: BackendUser;
+}
+
+// ----------------------------------------------------------------------------
+// Notifications -- shape returned by GET /notifications (see
+// backend/app/database/schemas.py's NotificationResponse). Currently only
+// populated by SLA at-risk/breach escalation events; `type` is always one
+// of the NotificationItem['type'] values below ('reminder' for at-risk,
+// 'sla_breach' for breached at either escalation level).
+// ----------------------------------------------------------------------------
+
+export interface BackendNotification {
+  id: number;
+  complaint_id: string | null;
+  type: string;
+  escalation_level: number;
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'bot' | 'user';
@@ -432,4 +487,10 @@ export interface ChatMessage {
     updatedOn: string;
   };
   actionChips?: string[];
+  // Human-friendly knowledge-document titles the backend grounded this
+  // reply in (see backend/app/routes/chatbot.py) -- never a ChromaDB
+  // collection name, file path, embedding, or similarity score. Present
+  // only on real backend-answered bot messages; absent on the canned
+  // welcome message and on error messages.
+  sources?: string[];
 }

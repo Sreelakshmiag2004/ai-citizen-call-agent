@@ -39,10 +39,6 @@ class TwilioService:
         return os.getenv("TWILIO_AUTH_TOKEN", "")
 
     @property
-    def phone_number(self) -> str:
-        return os.getenv("TWILIO_PHONE_NUMBER", "")
-
-    @property
     def is_configured(self) -> bool:
         return bool(self.account_sid and self.auth_token)
 

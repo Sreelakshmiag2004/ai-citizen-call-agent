@@ -19,9 +19,12 @@ import {
   PhoneCall
 } from 'lucide-react';
 import { AssistantChatbot } from '../components/chatbot/AssistantChatbot';
+import { TWILIO_PHONE_NUMBER } from '../services/api';
 
-// Call Center Helpline Phone Number (Placeholder - easily replaceable with actual number)
-const CALL_CENTER_PHONE_NUMBER = '0000000000';
+// Call Center Helpline Phone Number -- the real Twilio number configured via
+// VITE_TWILIO_PHONE_NUMBER (see services/api.ts), so "Start Call" actually
+// dials the number wired to the backend's /twilio/voice pipeline.
+const CALL_CENTER_PHONE_NUMBER = TWILIO_PHONE_NUMBER;
 
 export const LandingPage: React.FC = () => {
   const { navigate, resetComplaintDraft, complaints } = useApp();

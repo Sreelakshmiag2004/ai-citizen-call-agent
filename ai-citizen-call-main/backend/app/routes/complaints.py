@@ -7,12 +7,18 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import STAFF_ROLES, assert_can_access_complaint, get_current_user, require_role
+from app.core.rate_limit import ai_rate_limit
 from app.database.database import get_db
-from app.database.schemas import ComplaintCreate, StatusUpdateRequest
+from app.database.models import User
+from app.database.schemas import ComplaintCreate, FeedbackSubmitRequest, StatusUpdateRequest
 from app.services.analysis_service import analysis_service
+from app.services.audio_validation import validate_and_read_audio_file
 from app.services.complaint_service import complaint_service
 from app.services.department_routing import department_routing_service
 from app.services.duplicate_service import duplicate_service
+from app.services.feedback_service import feedback_service
+from app.services.providers.exceptions import LLMQuotaExceededError, LLMUnavailableError
 from app.services.whisper_service import whisper_service
 
 logger = logging.getLogger(__name__)
@@ -21,25 +27,13 @@ router = APIRouter()
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = BACKEND_DIR / "uploads"
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".mp4"}
-
-
-def _validate_audio_file(file: UploadFile) -> None:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided.")
-
-    extension = Path(file.filename).suffix.lower()
-    if extension not in ALLOWED_EXTENSIONS:
-        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format. Allowed formats: {allowed}",
-        )
 
 
 @router.post("/complaints")
 async def create_complaint(
-    request: ComplaintCreate, db: Session = Depends(get_db)
+    request: ComplaintCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     if not request.transcript or not request.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript is required.")
@@ -62,6 +56,10 @@ async def create_complaint(
             duplicate_of=request.duplicate_of,
             similarity_score=request.similarity_score,
             requested_complaint_id=request.complaint_id,
+            # Ownership always comes from the authenticated JWT identity,
+            # never from the request body -- ComplaintCreate has no
+            # created_by/user_id field a client could set.
+            created_by_user_id=current_user.id,
         )
         return complaint_service.get_complaint_by_id(db, cmp_obj.complaint_id)
     except ValueError as ve:
@@ -80,8 +78,13 @@ async def list_complaints(
     category: Optional[str] = Query(None, description="Filter by category"),
     location: Optional[str] = Query(None, description="Filter by location"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     try:
+        # Citizens only ever see their own complaints; staff roles (call
+        # center / officer / admin) see everything. This scoping is applied
+        # server-side regardless of what filters the client sends.
+        owner_filter = None if current_user.role in STAFF_ROLES else current_user.id
         return complaint_service.list_complaints(
             db=db,
             department=department,
@@ -89,6 +92,7 @@ async def list_complaints(
             status=status,
             category=category,
             location=location,
+            created_by_user_id=owner_filter,
         )
     except Exception as e:
         logger.exception("Error listing complaints: %s", str(e))
@@ -97,8 +101,11 @@ async def list_complaints(
 
 @router.get("/complaints/{complaint_id}")
 async def get_complaint(
-    complaint_id: str, db: Session = Depends(get_db)
+    complaint_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    assert_can_access_complaint(db, current_user, complaint_id)
     res = complaint_service.get_complaint_by_id(db, complaint_id)
     if not res:
         raise HTTPException(
@@ -112,6 +119,7 @@ async def update_complaint_status(
     complaint_id: str,
     request: StatusUpdateRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> Dict[str, Any]:
     if not request.status or not request.status.strip():
         raise HTTPException(status_code=400, detail="Status field is required.")
@@ -136,6 +144,7 @@ async def get_department_queue(
     status: Optional[str] = Query(None, description="Filter by status"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     norm_dept = department_routing_service.normalize_department(department)
     try:
@@ -149,12 +158,73 @@ async def get_department_queue(
 
 @router.get("/complaints/{complaint_id}/history")
 async def get_complaint_status_history(
-    complaint_id: str, db: Session = Depends(get_db)
+    complaint_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
+    assert_can_access_complaint(db, current_user, complaint_id)
     cmp_res = complaint_service.get_complaint_by_id(db, complaint_id)
     if not cmp_res:
         raise HTTPException(status_code=404, detail=f"Complaint '{complaint_id}' not found.")
     return complaint_service.get_status_history(db, complaint_id)
+
+
+@router.post("/complaints/{complaint_id}/feedback")
+async def submit_complaint_feedback(
+    complaint_id: str,
+    request: FeedbackSubmitRequest,
+    db: Session = Depends(get_db),
+    # Citizen-only: staff must never be able to submit feedback on a
+    # citizen's behalf. Combined with the ownership check below, this
+    # matches requirement "only the appropriate citizen can submit
+    # feedback for their complaint" -- identity/ownership always comes
+    # from the validated JWT, never anything the client sends.
+    current_user: User = Depends(require_role("citizen")),
+) -> Dict[str, Any]:
+    # Same not-found-for-both-cases pattern as every other ownership check
+    # in this app (see assert_can_access_complaint) -- doesn't leak
+    # whether a complaint exists to a citizen who doesn't own it. Safe to
+    # reuse directly here: current_user.role is guaranteed "citizen" by
+    # require_role above, so assert_can_access_complaint's staff-bypass
+    # branch can never be reached through this route.
+    assert_can_access_complaint(db, current_user, complaint_id)
+
+    feedback, created = feedback_service.submit_feedback(
+        db=db,
+        complaint_id=complaint_id,
+        user_id=current_user.id,
+        rating=request.rating,
+        comment=request.comment,
+    )
+    return {
+        "complaint_id": feedback.complaint_id,
+        "user_id": feedback.user_id,
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+        "created_at": feedback.created_at,
+        "updated_at": feedback.updated_at,
+        "created": created,
+    }
+
+
+@router.get("/complaints/{complaint_id}/feedback")
+async def get_complaint_feedback(
+    complaint_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    assert_can_access_complaint(db, current_user, complaint_id)
+    feedback = feedback_service.get_feedback(db, complaint_id)
+    if not feedback:
+        raise HTTPException(status_code=404, detail=f"No feedback submitted for complaint '{complaint_id}'.")
+    return {
+        "complaint_id": feedback.complaint_id,
+        "user_id": feedback.user_id,
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+        "created_at": feedback.created_at,
+        "updated_at": feedback.updated_at,
+    }
 
 
 async def run_audio_pipeline(
@@ -162,6 +232,7 @@ async def run_audio_pipeline(
     db: Session,
     call_sid: Optional[str] = None,
     recording_sid: Optional[str] = None,
+    created_by_user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """The ONE existing audio-processing pipeline shared by every input
     source (browser upload today, Twilio phone calls in Module 8A).
@@ -218,6 +289,7 @@ async def run_audio_pipeline(
         duplicate_of=duplicate_of,
         similarity_score=similarity,
         requested_complaint_id=temp_cmp_id,
+        created_by_user_id=created_by_user_id,
     )
 
     return {
@@ -230,22 +302,22 @@ async def run_audio_pipeline(
 
 @router.post("/process-and-create-ticket")
 async def process_and_create_ticket(
-    file: UploadFile = File(...), db: Session = Depends(get_db)
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(ai_rate_limit),
 ) -> Dict[str, Any]:
-    _validate_audio_file(file)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # Validates filename/extension/size/content BEFORE anything derived
+    # from the (possibly absent/malicious) filename is touched.
+    contents = await validate_and_read_audio_file(file)
 
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe_filename = Path(file.filename).name
     file_path = UPLOAD_DIR / safe_filename
 
     try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
         file_path.write_bytes(contents)
 
-        pipeline_result = await run_audio_pipeline(str(file_path), db)
+        pipeline_result = await run_audio_pipeline(str(file_path), db, created_by_user_id=current_user.id)
         full_complaint = pipeline_result["full_complaint"]
 
         return {
@@ -273,6 +345,15 @@ async def process_and_create_ticket(
 
     except HTTPException:
         raise
+    # Same 429/503 mapping app/routes/analysis.py already uses for AI
+    # provider errors -- previously missing here, so a Gemini/Groq quota
+    # limit or outage reaching run_audio_pipeline() fell through to a
+    # generic 500 instead of a precise status code. Fixed for both
+    # providers, not just Groq, since they share this exact code path.
+    except LLMQuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except LLMUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:

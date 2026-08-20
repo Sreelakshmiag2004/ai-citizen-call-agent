@@ -147,15 +147,23 @@ export const AdminCallCenterManagementPage: React.FC = () => {
           {/* SVG Bar Chart */}
           <div className="h-48 w-full pt-4 flex items-end justify-between px-4 border-b border-slate-100 pb-2">
             {ADMIN_EXECUTIVE_ACTIVITY.map((item, idx) => {
-              const heightPercent = (item.calls / 160) * 100;
+              // Pixel height, not percentage: this column's own parent (the
+              // per-bar flex-col div) has no definite height of its own --
+              // it shrinks to fit its content, since the chart row above
+              // uses `items-end` rather than `items-stretch`. A percentage
+              // height is therefore indeterminate per the CSS spec and
+              // renders as 0 (bars were invisible for every value). A fixed
+              // pixel height, capped to fit inside the h-48 (192px) row
+              // alongside the two label lines, has no such dependency.
+              const barHeightPx = Math.round((item.calls / 160) * 120);
               return (
                 <div key={idx} className="flex flex-col items-center gap-2 group flex-1">
                   <span className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity font-mono">
                     {item.calls}
                   </span>
-                  <div 
+                  <div
                     className="w-7 bg-[#1D4ED8] hover:bg-[#1e40af] rounded-t-md transition-all"
-                    style={{ height: `${heightPercent}%` }}
+                    style={{ height: `${barHeightPx}px` }}
                   />
                   <span className="text-[11px] text-slate-500 font-medium">{item.date}</span>
                 </div>

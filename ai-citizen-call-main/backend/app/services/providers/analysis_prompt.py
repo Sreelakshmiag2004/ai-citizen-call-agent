@@ -1,19 +1,19 @@
-"""Isolate which google-genai code path is actually executing for Tamil
-input, and what each path returns. Standalone -- does not touch
-analysis_service.py or any app code."""
-import os
-import sys
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from google import genai
-from google.genai import types
-
-TAMIL = "ஐயா, ஒரு மூணு நாள் தண்ணி இல்லையா விழுப்புரத்துல?"
+"""The complaint-classification system prompt, shared verbatim by every
+LLM analysis provider (Gemini, Groq, ...) -- the JSON contract it
+describes is provider-agnostic, so it lives in exactly one place rather
+than being copy-pasted per provider."""
 
 SYSTEM_PROMPT = """You are an AI government citizen complaint classification system.
 Your job is to analyze unstructured citizen complaint transcripts (written in English, Tamil, Hindi, Telugu, Malayalam, Kannada, or any other language) and convert them into structured JSON.
+
+IMPORTANT: Transcripts written in Tamil, Hindi, Telugu, Malayalam, Kannada, or any
+other non-Latin script are completely normal input, not an error condition.
+Read the script directly -- do NOT treat a transcript as "unreadable",
+"corrupted", or unclassifiable merely because it is not in English or not in
+the Latin alphabet. Only fall back to category "Other" / department "Other"
+when the transcript is genuinely empty, is random noise with no discernible
+words in any language, or truly does not describe an identifiable civic
+complaint after reading it in its original language.
 
 Rules:
 1. Category: A descriptive English title for the complaint (e.g., "Water Supply", "Electricity Outage", "Road Damage", "Garbage Collection", "Street Lighting", "Public Safety", "Healthcare", "Public Transport", "Flooding", "Drainage", "Other").
@@ -51,36 +51,3 @@ Return ONLY valid JSON matching this schema:
 }
 Do NOT include markdown formatting, explanations, or code blocks.
 """
-
-api_key = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
-model_name = os.getenv("LLM_MODEL", "gemini-3.6-flash").strip()
-print("model_name:", model_name)
-print("transcript repr:", repr(TAMIL))
-print("transcript bytes (utf-8):", TAMIL.encode("utf-8")[:40], "...")
-
-client = genai.Client(api_key=api_key)
-
-print("\n===== PATH A: client.interactions.create (current primary path) =====")
-try:
-    interaction = client.interactions.create(
-        model=model_name,
-        input=f"{SYSTEM_PROMPT}\n\nCitizen Complaint Transcript: {TAMIL}",
-    )
-    print("output_text:", interaction.output_text)
-except Exception as e:
-    print("EXCEPTION:", type(e).__name__, str(e))
-
-print("\n===== PATH B: client.models.generate_content (current fallback path) =====")
-try:
-    response = client.models.generate_content(
-        model=model_name,
-        contents=f"Citizen Complaint Transcript: {TAMIL}",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-            temperature=0.1,
-        ),
-    )
-    print("response.text:", response.text)
-except Exception as e:
-    print("EXCEPTION:", type(e).__name__, str(e))

@@ -44,7 +44,18 @@ import { OfficerNotificationsPage } from './pages/officer/OfficerNotificationsPa
 import { OfficerProfilePage } from './pages/officer/OfficerProfilePage';
 
 const AppRouter: React.FC = () => {
-  const { currentRoute, portalType, user } = useApp();
+  const { currentRoute, portalType, user, authLoading } = useApp();
+
+  // While a stored token is being verified against the backend (see
+  // AppContext's session-rehydration effect), avoid flashing the login
+  // screen for a user who is actually still logged in.
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-slate-300 border-t-[#003B95] rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   // Public non-sidebar pages
   if (currentRoute === 'landing') {

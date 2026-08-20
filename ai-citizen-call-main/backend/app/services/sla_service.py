@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.database.models import Complaint
+from app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,29 @@ class SLAService:
         if dirty:
             db.commit()
             db.refresh(complaint)
+
+        # Notification side effect -- deliberately NOT gated on `dirty`
+        # alone. `dirty` only tells us the row changed on *this* read; a
+        # complaint that was already AT_RISK/BREACHED before a recipient
+        # existed (or before this feature existed at all) would otherwise
+        # never get a notification, since its stored state never changes
+        # again. notify_sla_event() is safe to call on every read of an
+        # AT_RISK/BREACHED complaint because duplicate prevention is
+        # enforced underneath by Notification.dedup_key's DB uniqueness
+        # constraint (see notification_service.py's module docstring) --
+        # a recipient already notified for this exact transition is a
+        # cheap no-op, not a duplicate row. This does not change any SLA
+        # calculation/persistence behavior above; it is a pure side effect
+        # of whatever state was just computed.
+        try:
+            notification_service.notify_sla_event(db, complaint, state)
+        except Exception:
+            # A notification failure must never break SLA
+            # computation/reporting for the caller.
+            logger.exception(
+                "Failed to create SLA escalation notification(s) for complaint '%s'.",
+                complaint.complaint_id,
+            )
 
         return state
 

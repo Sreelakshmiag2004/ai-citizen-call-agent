@@ -8,9 +8,13 @@
 import {
   AnalyticsSummary,
   AnalyzeResult,
+  AuthTokenResponse,
   BackendComplaint,
+  BackendFeedback,
+  BackendNotification,
   BackendSLA,
   BackendStatusHistoryItem,
+  BackendUser,
   CategoryBreakdownItem,
   DepartmentBreakdownItem,
   DuplicateCheckResult,
@@ -30,6 +34,16 @@ import {
 export const API_BASE_URL: string =
   (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8001';
 
+// The citizen-facing Twilio phone number that answers via the backend's
+// /twilio/voice webhook (see backend/app/routes/twilio.py). A phone number
+// is not a secret -- it's meant to be dialed -- so it's safe to read from a
+// Vite env var and ship in the frontend bundle. This is NOT the Twilio
+// Account SID or Auth Token, neither of which is ever read or exposed here.
+// Falls back to the pre-existing placeholder if unset, so an unconfigured
+// checkout doesn't render a broken tel: link.
+export const TWILIO_PHONE_NUMBER: string =
+  (import.meta as any).env?.VITE_TWILIO_PHONE_NUMBER || '0000000000';
+
 /** Thrown by every api.ts function on a non-2xx response or network failure. */
 export class ApiError extends Error {
   status?: number;
@@ -40,7 +54,44 @@ export class ApiError extends Error {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Auth token storage. A bearer token in localStorage (not an HttpOnly
+// cookie) was chosen deliberately: the frontend (port 3000) and backend
+// (port 8001) are different origins in local dev, both plain HTTP with no
+// shared parent domain, and modern browsers require `SameSite=None;
+// Secure` (HTTPS-only) for a cookie to be sent on a cross-origin fetch --
+// which this dev/demo topology can't satisfy. The token itself is never
+// exposed to the backend except via the Authorization header below, and
+// it is never logged or sent anywhere else.
+// ----------------------------------------------------------------------------
+const TOKEN_STORAGE_KEY = 'govportal_access_token';
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setAuthToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    /* storage unavailable (e.g. private browsing) -- session just won't persist across reloads */
+  }
+}
+
+export function clearAuthToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* no-op */
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   let res: Response;
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
@@ -49,6 +100,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.body && !(init.body instanceof FormData)
           ? { 'Content-Type': 'application/json' }
           : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init?.headers || {}),
       },
     });
@@ -73,6 +125,51 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (res.status === 204) return undefined as unknown as T;
   return (await res.json()) as T;
+}
+
+// ----------------------------------------------------------------------------
+// Authentication
+// ----------------------------------------------------------------------------
+
+export interface RegisterPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  phone?: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+/** Public self-registration -- always creates a citizen account. */
+export function register(payload: RegisterPayload): Promise<AuthTokenResponse> {
+  return request<AuthTokenResponse>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function login(payload: LoginPayload): Promise<AuthTokenResponse> {
+  return request<AuthTokenResponse>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Re-fetches the authenticated identity from the backend using the stored
+ * token -- used on app load to rehydrate the session (or discover the
+ * stored token is stale/expired) instead of trusting anything client-side. */
+export function getMe(): Promise<BackendUser> {
+  return request<BackendUser>('/auth/me');
+}
+
+/** Stateless JWTs carry no server-side session to invalidate; this call
+ * exists mainly so a real 401 is surfaced if there's no valid token. The
+ * actual "forget the session" step is clearAuthToken() client-side. */
+export function logoutBackend(): Promise<{ message: string }> {
+  return request('/auth/logout', { method: 'POST' });
 }
 
 // ----------------------------------------------------------------------------
@@ -193,6 +290,28 @@ export function getComplaintHistory(complaintId: string): Promise<BackendStatusH
   return request<BackendStatusHistoryItem[]>(`/complaints/${encodeURIComponent(complaintId)}/history`);
 }
 
+// Citizen feedback (rating/comment) -- see backend/app/services/feedback_service.py.
+// Submitting again for the same complaint updates the existing feedback
+// rather than creating a duplicate.
+export interface SubmitFeedbackPayload {
+  rating: number;
+  comment?: string;
+}
+
+export function submitComplaintFeedback(
+  complaintId: string,
+  payload: SubmitFeedbackPayload
+): Promise<BackendFeedback> {
+  return request<BackendFeedback>(`/complaints/${encodeURIComponent(complaintId)}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getComplaintFeedback(complaintId: string): Promise<BackendFeedback> {
+  return request<BackendFeedback>(`/complaints/${encodeURIComponent(complaintId)}/feedback`);
+}
+
 // The single convenience endpoint that runs the entire audio pipeline
 // (Whisper -> LLM -> ChromaDB duplicate detection -> complaint/ticket/SLA)
 // in one call. Used where a two-phase editable review isn't needed.
@@ -227,6 +346,23 @@ export function getSLABreached(): Promise<SLABreachedItem[]> {
 
 export function recalculateSLAs(): Promise<{ message: string; recalculated_count: number; summary: SLASummary }> {
   return request('/sla/recalculate', { method: 'POST' });
+}
+
+// ----------------------------------------------------------------------------
+// Notifications -- persistent, backend-delivered (currently SLA
+// escalation events only; see backend/app/services/notification_service.py)
+// ----------------------------------------------------------------------------
+
+export function getNotifications(unreadOnly = false): Promise<BackendNotification[]> {
+  return request<BackendNotification[]>(`/notifications${unreadOnly ? '?unread_only=true' : ''}`);
+}
+
+export function markNotificationRead(notificationId: number): Promise<BackendNotification> {
+  return request<BackendNotification>(`/notifications/${notificationId}/read`, { method: 'PATCH' });
+}
+
+export function markAllNotificationsRead(): Promise<{ message: string; updated_count: number }> {
+  return request('/notifications/read-all', { method: 'POST' });
 }
 
 // ----------------------------------------------------------------------------
@@ -284,4 +420,26 @@ export async function pingBackend(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ----------------------------------------------------------------------------
+// Chatbot — public RAG FAQ assistant (see backend/app/routes/chatbot.py).
+// Deliberately unauthenticated: this call carries a bearer token via
+// `request()` if the caller happens to be logged in, but the backend
+// endpoint doesn't require one and ignores it either way. It never
+// returns complaint or user data — `sources` are human-friendly knowledge
+// document titles only (never a collection name, file path, embedding, or
+// similarity score).
+// ----------------------------------------------------------------------------
+
+export interface ChatbotReply {
+  reply: string;
+  sources: string[];
+}
+
+export function sendChatbotMessage(message: string): Promise<ChatbotReply> {
+  return request<ChatbotReply>('/chatbot/message', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
 }

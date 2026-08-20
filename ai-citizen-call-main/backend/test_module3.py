@@ -6,6 +6,8 @@ from pathlib import Path
 backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 
+import test_config  # noqa: F401 -- must run before any `app.*` import; isolates DB/ChromaDB
+
 from app.services.chroma_service import chroma_service
 from app.services.duplicate_service import duplicate_service
 

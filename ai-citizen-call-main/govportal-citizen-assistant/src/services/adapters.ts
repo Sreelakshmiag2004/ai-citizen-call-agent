@@ -8,12 +8,64 @@
 
 import {
   BackendComplaint,
+  BackendNotification,
   BackendStatusHistoryItem,
+  BackendUser,
   Complaint,
   ComplaintStatus,
+  NotificationItem,
   PriorityLevel,
   TimelineEvent,
+  UserProfile,
 } from '../types';
+
+const ROLE_LABELS: Record<string, string> = {
+  citizen: 'Citizen',
+  'call-center': 'Call Center Executive',
+  officer: 'Officer',
+  admin: 'Administrator',
+};
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '??';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/** Maps the real authenticated backend user (GET /auth/me, or the `user`
+ * field of a login/register response) onto the existing UserProfile shape
+ * the portal UI already renders everywhere. */
+export function mapBackendUserToProfile(u: BackendUser): UserProfile {
+  return {
+    fullName: u.full_name,
+    email: u.email,
+    mobileNumber: u.phone || '',
+    address: '',
+    role: ROLE_LABELS[u.role] || u.role,
+    avatarInitials: initialsFromName(u.full_name),
+    joinedDate: new Date(u.created_at).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+    status: 'Active',
+    portalType: u.role,
+  };
+}
+
+/** Maps a real backend notification (GET /notifications -- currently only
+ * SLA at-risk/breach escalation events, see
+ * backend/app/services/notification_service.py) onto the existing
+ * NotificationItem shape every portal's notification UI already renders. */
+export function mapBackendNotificationToUI(n: BackendNotification): NotificationItem {
+  return {
+    id: String(n.id),
+    complaintId: n.complaint_id || undefined,
+    type: n.type as NotificationItem['type'],
+    category: 'SLA & Escalations',
+    title: n.title,
+    message: n.message,
+    timestamp: formatBackendDate(n.created_at),
+    isRead: n.is_read,
+  };
+}
 
 export function mapBackendStatusToUI(status: string): ComplaintStatus {
   switch ((status || '').toUpperCase()) {
@@ -151,5 +203,12 @@ export function mapBackendComplaintToUI(bc: BackendComplaint): Complaint {
     escalatedAt: bc.escalated_at,
     wasBreached: bc.was_breached,
     reportCount: bc.report_count,
+    feedback: bc.feedback
+      ? {
+          rating: bc.feedback.rating,
+          comment: bc.feedback.comment || '',
+          submittedAt: formatBackendDate(bc.feedback.updated_at),
+        }
+      : undefined,
   };
 }

@@ -27,6 +27,8 @@ export const ComplaintTrackingPage: React.FC = () => {
   const [rating, setRating] = useState(5);
   const [feedbackComment, setFeedbackComment] = useState('');
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   // Pull the full record + real status history for this one complaint —
   // GET /complaints only returns summary fields for the list view.
@@ -82,10 +84,17 @@ export const ComplaintTrackingPage: React.FC = () => {
     return '-';
   };
 
-  const handleFeedbackSubmit = (e: React.FormEvent) => {
+  const handleFeedbackSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    addComplaintFeedback(complaint.id, rating, feedbackComment);
-    setFeedbackSubmitted(true);
+    setFeedbackError(null);
+    setFeedbackSubmitting(true);
+    const result = await addComplaintFeedback(complaint.id, rating, feedbackComment);
+    setFeedbackSubmitting(false);
+    if (result.ok) {
+      setFeedbackSubmitted(true);
+    } else {
+      setFeedbackError(result.error);
+    }
   };
 
   const handleDownloadReport = () => {
@@ -447,12 +456,19 @@ Generated via GovPortal Citizen Redressal System.`;
                   />
                 </div>
 
+                {feedbackError && (
+                  <div className="px-3 py-2.5 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-lg">
+                    {feedbackError}
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-[#003B95] hover:bg-[#002D72] text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-2"
+                  disabled={feedbackSubmitting}
+                  className="px-6 py-2.5 bg-[#003B95] hover:bg-[#002D72] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-2"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>Submit Feedback</span>
+                  <span>{feedbackSubmitting ? 'Submitting…' : 'Submit Feedback'}</span>
                 </button>
               </form>
             )}

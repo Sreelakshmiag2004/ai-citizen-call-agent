@@ -9,14 +9,24 @@ from fastapi.responses import JSONResponse
 
 load_dotenv()
 
-from app.database.database import Base, engine, ensure_keywords_column
+from app.database.database import (
+    Base,
+    SessionLocal,
+    engine,
+    ensure_created_by_user_id_column,
+    ensure_keywords_column,
+)
 from app.routes.analysis import router as analysis_router
 from app.routes.analytics import router as analytics_router
+from app.routes.auth import router as auth_router
+from app.routes.chatbot import router as chatbot_router
 from app.routes.complaints import router as complaints_router
 from app.routes.duplicate import router as duplicate_router
+from app.routes.notifications import router as notifications_router
 from app.routes.sla import router as sla_router
 from app.routes.transcription import router as transcription_router
 from app.routes.twilio import router as twilio_router
+from app.services.user_service import seed_demo_users
 from app.services.whisper_service import whisper_service
 
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +37,12 @@ def _init_db() -> None:
     logger.info("Initializing SQLite database tables...")
     Base.metadata.create_all(bind=engine)
     ensure_keywords_column()
+    ensure_created_by_user_id_column()
+    db = SessionLocal()
+    try:
+        seed_demo_users(db)
+    finally:
+        db.close()
     logger.info("Database tables initialized successfully.")
 
 
@@ -50,15 +66,13 @@ app = FastAPI(
 )
 
 # Dev-only CORS: allow the local Vite frontend to call this API.
-# Only the specific local dev origins are allowed -- not a wildcard.
-# Port 3000 is the govportal-citizen-assistant frontend (its package.json
-# pins `vite --port=3000`); 5173 is Vite's own default, kept for any other
-# local frontend dev server.
+# Only the specific local dev origin is allowed -- not a wildcard. Port
+# 3000 is the govportal-citizen-assistant frontend (its package.json pins
+# `vite --port=3000`) -- the only frontend in this repo since `frontend/`
+# (which used Vite's 5173 default) was removed.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
@@ -67,10 +81,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(chatbot_router)
 app.include_router(transcription_router)
 app.include_router(analysis_router)
 app.include_router(duplicate_router)
 app.include_router(complaints_router)
+app.include_router(notifications_router)
 app.include_router(sla_router)
 app.include_router(analytics_router)
 app.include_router(twilio_router)

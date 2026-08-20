@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +9,13 @@ from chromadb.config import Settings
 logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-CHROMA_DATA_DIR = BACKEND_DIR / "data" / "chroma"
+
+# CITIZEN_CHROMA_DIR lets the test suite (see backend/test_config.py) point
+# ChromaDB at a disposable directory instead of the presentation vector
+# store. Unset in normal (dev/demo) runs, so production behavior is
+# unchanged.
+_chroma_dir_override = os.getenv("CITIZEN_CHROMA_DIR", "").strip()
+CHROMA_DATA_DIR = Path(_chroma_dir_override) if _chroma_dir_override else BACKEND_DIR / "data" / "chroma"
 COLLECTION_NAME = "citizen_complaints"
 
 

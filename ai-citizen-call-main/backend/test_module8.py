@@ -14,15 +14,33 @@ from unittest.mock import PropertyMock, patch
 backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 
+import test_config  # noqa: F401 -- must run before any `app.*` import; isolates DB/ChromaDB
+
 from fastapi.testclient import TestClient
 
+from app.database.database import Base, SessionLocal, engine
 from app.main import app
+from app.services.user_service import seed_demo_users
 from app.services.whisper_service import whisper_service
 from app.services.twilio_service import TwilioService, twilio_service
 
 client = TestClient(app)
 
 SAMPLE_WAV = backend_dir / "sample_test.wav"
+
+# Twilio-sourced complaints have no owning citizen (see created_by_user_id
+# in run_audio_pipeline -- a phone call isn't tied to a portal login), so
+# only a staff role can read them back. Cached lazily so every helper below
+# can just call _officer_headers() without re-authenticating each time.
+_officer_token_cache = {"token": None}
+
+
+def _officer_headers() -> dict:
+    if _officer_token_cache["token"] is None:
+        resp = client.post("/auth/login", json={"email": "priya.sharma@pwd.gov.in", "password": "Officer@123"})
+        resp.raise_for_status()
+        _officer_token_cache["token"] = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {_officer_token_cache['token']}"}
 
 BASE_FORM = {
     "CallSid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -43,7 +61,7 @@ def _recording_form(status="completed", recording_sid="RExxxxxxxxxxxxxxxxxxxxxxx
 
 
 def _total_complaints() -> int:
-    resp = client.get("/analytics/summary")
+    resp = client.get("/analytics/summary", headers=_officer_headers())
     resp.raise_for_status()
     return resp.json()["total_complaints"]
 
@@ -55,6 +73,16 @@ def run_tests():
 
     if not SAMPLE_WAV.exists():
         raise RuntimeError(f"Missing fixture audio file: {SAMPLE_WAV}")
+
+    # Additive (not drop_all) -- this module accumulates onto whatever the
+    # previously-run test module already seeded in the same process/DB, and
+    # is also safely runnable standalone (`python test_module8.py`).
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        seed_demo_users(db)
+    finally:
+        db.close()
 
     # --------------------------------------------------------------
     # TEST 1: /twilio/voice returns valid TwiML
@@ -148,7 +176,7 @@ def run_tests():
 
     # The resulting complaint looks exactly like one created via the browser-upload path:
     # real category/department/priority/SLA fields, not fake data.
-    detail_resp = client.get(f"/complaints/{complaint_id}")
+    detail_resp = client.get(f"/complaints/{complaint_id}", headers=_officer_headers())
     assert detail_resp.status_code == 200
     complaint = detail_resp.json()
     print("Created complaint:", complaint)

@@ -4,7 +4,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import assert_can_access_complaint, get_current_user, require_role
 from app.database.database import get_db
+from app.database.models import User
 from app.services.sla_service import sla_service
 
 logger = logging.getLogger(__name__)
@@ -14,8 +16,11 @@ router = APIRouter()
 
 @router.get("/complaints/{complaint_id}/sla")
 async def get_complaint_sla(
-    complaint_id: str, db: Session = Depends(get_db)
+    complaint_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    assert_can_access_complaint(db, current_user, complaint_id)
     res = sla_service.get_complaint_sla(db, complaint_id)
     if not res:
         raise HTTPException(
@@ -25,7 +30,10 @@ async def get_complaint_sla(
 
 
 @router.get("/sla/summary")
-async def get_sla_summary(db: Session = Depends(get_db)) -> Dict[str, int]:
+async def get_sla_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
+) -> Dict[str, int]:
     try:
         return sla_service.get_sla_summary(db)
     except Exception as e:
@@ -35,7 +43,8 @@ async def get_sla_summary(db: Session = Depends(get_db)) -> Dict[str, int]:
 
 @router.get("/sla/breached")
 async def get_breached_complaints(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return sla_service.get_breached_complaints(db)
@@ -46,7 +55,8 @@ async def get_breached_complaints(
 
 @router.get("/sla/at-risk")
 async def get_at_risk_complaints(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return sla_service.get_at_risk_complaints(db)
@@ -56,7 +66,10 @@ async def get_at_risk_complaints(
 
 
 @router.post("/sla/recalculate")
-async def recalculate_slas(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def recalculate_slas(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+) -> Dict[str, Any]:
     try:
         return sla_service.recalculate_all_slas(db)
     except Exception as e:

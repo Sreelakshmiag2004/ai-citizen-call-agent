@@ -4,7 +4,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import require_role
 from app.database.database import get_db
+from app.database.models import User
 from app.services.analytics_service import analytics_service
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,9 @@ def _days_query(
 
 @router.get("/analytics/summary")
 async def get_analytics_summary(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> Dict[str, Any]:
     try:
         return analytics_service.get_summary(db, days=days)
@@ -35,7 +39,9 @@ async def get_analytics_summary(
 
 @router.get("/analytics/departments")
 async def get_analytics_departments(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return analytics_service.get_department_breakdown(db, days=days)
@@ -46,7 +52,9 @@ async def get_analytics_departments(
 
 @router.get("/analytics/categories")
 async def get_analytics_categories(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return analytics_service.get_category_breakdown(db, days=days)
@@ -57,7 +65,9 @@ async def get_analytics_categories(
 
 @router.get("/analytics/priorities")
 async def get_analytics_priorities(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return analytics_service.get_priority_breakdown(db, days=days)
@@ -68,7 +78,9 @@ async def get_analytics_priorities(
 
 @router.get("/analytics/status")
 async def get_analytics_status(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> Dict[str, int]:
     try:
         return analytics_service.get_status_breakdown(db, days=days)
@@ -79,7 +91,9 @@ async def get_analytics_status(
 
 @router.get("/analytics/duplicates")
 async def get_analytics_duplicates(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> Dict[str, Any]:
     try:
         return analytics_service.get_duplicate_stats(db, days=days)
@@ -90,7 +104,9 @@ async def get_analytics_duplicates(
 
 @router.get("/analytics/sla")
 async def get_analytics_sla(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> Dict[str, Any]:
     try:
         return analytics_service.get_sla_stats(db, days=days)
@@ -101,7 +117,9 @@ async def get_analytics_sla(
 
 @router.get("/analytics/locations")
 async def get_analytics_locations(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return analytics_service.get_location_breakdown(db, days=days)
@@ -112,7 +130,9 @@ async def get_analytics_locations(
 
 @router.get("/analytics/top-issues")
 async def get_analytics_top_issues(
-    days: DaysParam = Depends(_days_query), db: Session = Depends(get_db)
+    days: DaysParam = Depends(_days_query),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("call-center", "officer", "admin")),
 ) -> List[Dict[str, Any]]:
     try:
         return analytics_service.get_top_issues(db, days=days)

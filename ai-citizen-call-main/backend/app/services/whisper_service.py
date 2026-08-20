@@ -1,48 +1,35 @@
-from faster_whisper import WhisperModel
+"""Speech-to-text dispatcher -- routes to whichever STT provider is
+configured (app/services/providers/config.py's STT_PROVIDER: "local"
+[default, faster-whisper] or "groq"). This module is the STABLE public
+interface every caller already imports (app/routes/transcription.py,
+app/routes/analysis.py, app/routes/complaints.py's run_audio_pipeline,
+app/main.py's startup hook) and its shape never changes regardless of
+which provider is active -- see app/services/providers/ for the actual
+local-whisper and Groq implementations.
+"""
+
+from app.services.providers import config
+from app.services.providers.groq_provider import groq_transcription_provider
+from app.services.providers.local_whisper_provider import local_whisper_provider
 
 
 class WhisperService:
 
-    def __init__(self):
-        self._model = None
-
     @property
-    def model(self) -> WhisperModel:
-        if self._model is None:
-            self._model = WhisperModel(
-                "small",
-                device="cpu",
-                compute_type="int8",
-            )
-        return self._model
+    def model(self):
+        """Preserves the existing eager-load-at-startup hook in
+        app/main.py's _load_whisper_model() (`_ = whisper_service.model`),
+        which only makes sense for the local faster-whisper model -- Groq
+        is a remote API with nothing to preload, so this is a no-op when
+        STT_PROVIDER=groq rather than an error."""
+        if config.STT_PROVIDER == "groq":
+            return None
+        return local_whisper_provider.model
 
     def transcribe(self, audio_path: str) -> dict:
-        segments_iter, info = self.model.transcribe(
-            audio_path,
-            beam_size=5,
-        )
-
-        segments = []
-        transcript_parts = []
-
-        for segment in segments_iter:
-            text = segment.text.strip()
-            segments.append(
-                {
-                    "start": round(segment.start, 2),
-                    "end": round(segment.end, 2),
-                    "text": text,
-                }
-            )
-            if text:
-                transcript_parts.append(text)
-
-        return {
-            "language": info.language,
-            "language_probability": round(info.language_probability, 4),
-            "transcript": " ".join(transcript_parts),
-            "segments": segments,
-        }
+        if config.STT_PROVIDER == "groq":
+            return groq_transcription_provider.transcribe(audio_path)
+        return local_whisper_provider.transcribe(audio_path)
 
 
 whisper_service = WhisperService()

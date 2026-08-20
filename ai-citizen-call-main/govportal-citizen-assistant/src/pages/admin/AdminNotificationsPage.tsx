@@ -16,9 +16,11 @@ export const AdminNotificationsPage: React.FC = () => {
 
   const filtered = adminNotifications.filter(n => {
     if (selectedTab === 'All') return true;
-    if (selectedTab === 'System Alerts') return n.type === 'system';
-    if (selectedTab === 'SLA Breaches') return n.type === 'sla';
-    if (selectedTab === 'User Updates') return n.type === 'user';
+    if (selectedTab === 'System Alerts') return n.type === 'system_update' || n.type === 'maintenance';
+    // 'sla_breach' covers both escalation levels; 'reminder' is the
+    // at-risk (pre-breach) warning -- see notification_service.py.
+    if (selectedTab === 'SLA Breaches') return n.type === 'sla_breach' || n.type === 'reminder';
+    if (selectedTab === 'User Updates') return n.type === 'user_created';
     return true;
   });
 
@@ -79,13 +81,13 @@ export const AdminNotificationsPage: React.FC = () => {
             >
               {/* Icon */}
               <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                notification.type === 'sla' ? 'bg-rose-50 text-rose-600' :
-                notification.type === 'system' ? 'bg-amber-50 text-amber-600' :
+                notification.type === 'sla_breach' || notification.type === 'reminder' ? 'bg-rose-50 text-rose-600' :
+                notification.type === 'system_update' || notification.type === 'maintenance' ? 'bg-amber-50 text-amber-600' :
                 'bg-blue-50 text-blue-600'
               }`}>
-                {notification.type === 'sla' && <AlertTriangle className="w-5 h-5" />}
-                {notification.type === 'system' && <Clock className="w-5 h-5" />}
-                {notification.type === 'user' && <UserPlus className="w-5 h-5" />}
+                {(notification.type === 'sla_breach' || notification.type === 'reminder') && <AlertTriangle className="w-5 h-5" />}
+                {(notification.type === 'system_update' || notification.type === 'maintenance') && <Clock className="w-5 h-5" />}
+                {notification.type === 'user_created' && <UserPlus className="w-5 h-5" />}
               </div>
 
               {/* Content */}
@@ -99,7 +101,7 @@ export const AdminNotificationsPage: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 mt-1">
-                  {notification.description}
+                  {notification.message}
                 </p>
 
                 {/* Bottom metadata / action link */}
@@ -110,8 +112,8 @@ export const AdminNotificationsPage: React.FC = () => {
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (notification.type === 'sla') navigate('sla-escalations');
-                      else if (notification.type === 'user') navigate('user-management');
+                      if (notification.type === 'sla_breach' || notification.type === 'reminder') navigate('sla-escalations');
+                      else if (notification.type === 'user_created') navigate('user-management');
                       else navigate('dashboard');
                     }}
                     className="text-xs font-semibold text-[#1D4ED8] hover:underline flex items-center gap-0.5"
